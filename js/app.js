@@ -13,6 +13,8 @@
     loginGradeFilter: 7,
     loginClassFilter: "7A11",
     loginSelectedStudentId: "",
+    loginPartnerStudentIds: [], // Danh sách ID học sinh được tích chọn ghép cặp làm việc nhóm
+    loginSearchQuery: "",
     // Student Portal state
     studentTab: "live", // 'live' | 'preclass' | 'practice' | 'exams' | 'analytics'
     partnerIds: [], // Danh sách ID bạn cùng nhóm đã ghép cặp
@@ -133,7 +135,7 @@
   }
 
   // ============================================================================
-  // 1. MÀN HÌNH ĐĂNG NHẬP (HỌC SINH MK 123 & GIÁO VIÊN MK 666)
+  // 1. MÀN HÌNH ĐĂNG NHẬP (BỐ TRÍ MỚI: CHỌN KHỐI, CHỌN LỚP HÀNG NGANG & TÍCH GHÉP CẶP)
   // ============================================================================
   function renderLoginScreen() {
     const db = Store.loadStudentsDB();
@@ -143,151 +145,335 @@
     }
     const studentsOfClass = db.students.filter(s => s.className === state.loginClassFilter);
     const selectedStudent = studentsOfClass.find(s => s.id === state.loginSelectedStudentId) || studentsOfClass[0];
-    if (selectedStudent && !state.loginSelectedStudentId) {
+    if (selectedStudent && (!state.loginSelectedStudentId || !studentsOfClass.some(s => s.id === state.loginSelectedStudentId))) {
       state.loginSelectedStudentId = selectedStudent.id;
     }
 
+    // Đảm bảo danh sách ghép cặp chỉ chứa học sinh cùng lớp hợp lệ và khác học sinh chính
+    state.loginPartnerStudentIds = (state.loginPartnerStudentIds || []).filter(
+      id => id !== state.loginSelectedStudentId && studentsOfClass.some(s => s.id === id)
+    );
+    const partnerStudents = studentsOfClass.filter(s => state.loginPartnerStudentIds.includes(s.id));
+
+    // Lọc theo từ khóa tìm kiếm nếu có
+    let displayStudents = studentsOfClass;
+    if (state.loginSearchQuery && state.loginSearchQuery.trim()) {
+      const q = state.loginSearchQuery.trim().toLowerCase();
+      displayStudents = studentsOfClass.filter(s =>
+        s.fullName.toLowerCase().includes(q) ||
+        s.username.toLowerCase().includes(q) ||
+        (s.dob && s.dob.includes(q))
+      );
+    }
+
     return `
-      <div class="min-h-screen bg-gradient-to-br from-slate-900 via-blue-950 to-indigo-950 flex flex-col justify-center items-center p-4">
-        <div class="max-w-4xl w-full bg-white rounded-3xl shadow-2xl overflow-hidden grid grid-cols-1 md:grid-cols-12 border border-slate-200">
-          <!-- Banner trái -->
-          <div class="md:col-span-5 bg-gradient-to-br from-blue-600 to-indigo-800 text-white p-8 flex flex-col justify-between">
-            <div>
-              <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/15 text-xs font-bold tracking-wider uppercase mb-4">
-                🏫 Trường THCS Mão Điền
+      <div class="min-h-screen bg-gradient-to-br from-slate-900 via-blue-950 to-indigo-950 flex flex-col justify-center items-center p-3 md:p-6">
+        <div class="max-w-7xl w-full bg-white rounded-3xl shadow-2xl overflow-hidden border border-slate-200 flex flex-col">
+          
+          <!-- Thanh tiêu đề trường & phân hiệu -->
+          <div class="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white px-6 py-4 flex flex-wrap items-center justify-between gap-3 border-b border-indigo-950">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center text-xl shadow-inner">
+                🏫
               </div>
-              <h1 class="text-2xl font-extrabold leading-tight mb-3">
-                HỆ THỐNG PHÒNG HỌC LIVE & CỔNG HỌC TẬP TIN HỌC THCS
-              </h1>
-              <p class="text-blue-100 text-sm mb-6">
-                Tích hợp Học trực tiếp tại Phòng máy (Ghép cặp nhóm, 3 Hoạt động, Nộp sản phẩm Google Drive) & Cổng tự học tại nhà 29 tiết Khối 6, 7, 8, 9.
-              </p>
-              <div class="space-y-2.5 text-xs text-blue-100">
-                <div class="flex items-center gap-2 bg-white/10 p-2.5 rounded-xl">
-                  <span class="text-lg">👥</span>
-                  <span><b>670 Học sinh (15 Lớp):</b> Khối 6, 7, 8, 9 chuẩn hóa tài khoản tự động</span>
-                </div>
-                <div class="flex items-center gap-2 bg-white/10 p-2.5 rounded-xl">
-                  <span class="text-lg">⚡</span>
-                  <span><b>Phòng Live 3 Hoạt động:</b> Khám phá Nhóm & Ghi vở • Minigame • Thực hành nộp Drive</span>
-                </div>
-                <div class="flex items-center gap-2 bg-white/10 p-2.5 rounded-xl">
-                  <span class="text-lg">🏠</span>
-                  <span><b>Cổng Học tại nhà:</b> Tìm hiểu bài trước, Ôn luyện, Kiểm tra định kỳ & So sánh Lớp/Khối</span>
-                </div>
+              <div>
+                <div class="text-[11px] uppercase tracking-wider text-blue-200 font-bold">UBND Phường Mão Điền • Trường THCS Mão Điền</div>
+                <h1 class="text-base md:text-lg font-extrabold text-white">HỆ THỐNG PHÒNG HỌC LIVE & CỔNG HỌC TẬP TIN HỌC THCS</h1>
               </div>
             </div>
-            <div class="mt-6 pt-4 border-t border-white/20 text-xs text-blue-200 flex justify-between">
-              <span>KNTT • CV 3456 • AI 3439</span>
-              <span>GitHub Pages Cloud</span>
+            <div class="flex items-center gap-2 text-xs text-blue-200">
+              <span class="px-2.5 py-1 rounded-full bg-white/10 font-medium">KNTT • CV 3456 • AI 3439</span>
+              <span class="px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 font-bold flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 670 Học sinh (15 Lớp)
+              </span>
             </div>
           </div>
 
-          <!-- Form đăng nhập phải -->
-          <div class="md:col-span-7 p-8">
-            <div class="flex rounded-xl bg-slate-100 p-1 mb-6">
-              <button id="tab-login-student" class="flex-1 py-2.5 rounded-lg text-sm font-bold transition ${
-                state.loginRoleTab === "student" ? "bg-blue-600 text-white shadow" : "text-slate-600 hover:text-slate-900"
-              }">
-                👨‍🎓 Cổng Học sinh (MK: 123)
-              </button>
-              <button id="tab-login-admin" class="flex-1 py-2.5 rounded-lg text-sm font-bold transition ${
-                state.loginRoleTab === "admin" ? "bg-indigo-600 text-white shadow" : "text-slate-600 hover:text-slate-900"
-              }">
-                👨‍🏫 Cổng Giáo viên (MK: 666)
-              </button>
+          <!-- Bố cục 2 Cột chính: Bên Trái (Khối -> Lớp Ngang -> Danh sách HS + Tích Ghép cặp) | Bên Phải (Cổng Đăng nhập) -->
+          <div class="grid grid-cols-1 lg:grid-cols-12 min-h-[580px]">
+            
+            <!-- ============================================================ -->
+            <!-- CỘT BÊN TRÁI: ĐIỀU HƯỚNG KHỐI, LỚP HÀNG NGANG & DANH SÁCH HS -->
+            <!-- ============================================================ -->
+            <div class="lg:col-span-7 xl:col-span-8 p-5 md:p-6 bg-slate-50 border-r border-slate-200 flex flex-col justify-between">
+              <div>
+                <!-- 1. NÚT CHỌN KHỐI 6, 7, 8, 9 -->
+                <div class="mb-4">
+                  <div class="flex items-center justify-between mb-2">
+                    <label class="text-xs font-extrabold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                      <span class="w-2.5 h-2.5 rounded-full bg-blue-600"></span> 1. Chọn Khối Học:
+                    </label>
+                    <span class="text-[11px] text-slate-500 font-medium">Chọn một khối để hiển thị danh sách lớp</span>
+                  </div>
+                  <div class="grid grid-cols-4 gap-2">
+                    ${[6, 7, 8, 9].map(g => {
+                      const isActive = Number(state.loginGradeFilter) === g;
+                      return `
+                        <button type="button" class="btn-grade-chip py-2.5 px-3 rounded-xl font-extrabold text-sm transition-all flex items-center justify-center gap-1.5 ${
+                          isActive
+                            ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30 scale-[1.02] ring-2 ring-blue-400'
+                            : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-300'
+                        }" data-grade="${g}">
+                          <span>Khối ${g}</span>
+                        </button>
+                      `;
+                    }).join("")}
+                  </div>
+                </div>
+
+                <!-- 2. NÚT CHỌN LỚP THEO HÀNG NGANG CỦA KHỐI VỪA CHỌN -->
+                <div class="mb-4">
+                  <div class="flex items-center justify-between mb-2">
+                    <label class="text-xs font-extrabold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                      <span class="w-2.5 h-2.5 rounded-full bg-indigo-600"></span> 2. Chọn Lớp Học (Hàng ngang):
+                    </label>
+                    <span class="text-[11px] text-indigo-700 font-bold bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200">
+                      ${classesOfGrade.length} lớp thuộc Khối ${state.loginGradeFilter}
+                    </span>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    ${classesOfGrade.map(c => {
+                      const isActive = state.loginClassFilter === c.id;
+                      return `
+                        <button type="button" class="btn-class-chip px-4 py-2 rounded-xl text-xs md:text-sm font-extrabold transition-all flex items-center gap-1.5 ${
+                          isActive
+                            ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30 ring-2 ring-indigo-400 scale-105'
+                            : 'bg-white hover:bg-indigo-50 text-slate-700 border border-slate-300 hover:border-indigo-400'
+                        }" data-class-id="${c.id}">
+                          <span>🏫 Lớp ${c.name}</span>
+                          <span class="text-[11px] px-1.5 py-0.2 rounded-full ${isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'}">
+                            ${c.studentCount} HS
+                          </span>
+                        </button>
+                      `;
+                    }).join("")}
+                  </div>
+                </div>
+
+                <!-- 3. DANH SÁCH HỌC SINH CỦA LỚP ĐƯỢC CHỌN + NÚT TÍCH GHÉP CẶP -->
+                <div class="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-sm">
+                  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+                    <div>
+                      <div class="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                        <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> 3. Danh Sách Học Sinh Lớp ${state.loginClassFilter} (${studentsOfClass.length} HS)
+                      </div>
+                      <p class="text-[11px] text-slate-500 mt-0.5">
+                        👉 Nhấn vào dòng học sinh để <b>Đăng nhập chính</b> • Tích ô <b>[Ghép cặp]</b> để chọn bạn cùng nhóm làm bài
+                      </p>
+                    </div>
+                    <div class="w-full sm:w-56">
+                      <input id="login-student-search-input" type="text" value="${escapeHtml(state.loginSearchQuery || '')}"
+                        placeholder="🔍 Tìm nhanh theo tên hoặc tài khoản..."
+                        class="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 focus:border-blue-500 focus:outline-none" />
+                    </div>
+                  </div>
+
+                  <!-- Khung cuộn danh sách học sinh -->
+                  <div id="student-list-container" class="mt-2 overflow-y-auto max-h-[350px] pr-1 space-y-1.5">
+                    ${displayStudents.length === 0 ? `
+                      <div class="py-8 text-center text-xs text-slate-400">
+                        Không tìm thấy học sinh nào khớp với từ khóa tìm kiếm.
+                      </div>
+                    ` : displayStudents.map(s => {
+                      const isPrimary = selectedStudent && selectedStudent.id === s.id;
+                      const isPartner = state.loginPartnerStudentIds.includes(s.id);
+                      return `
+                        <div class="student-item-row flex items-center justify-between gap-2 p-2 rounded-xl transition-all cursor-pointer select-none ${
+                          isPrimary
+                            ? 'bg-blue-50/90 border-2 border-blue-500 shadow-sm'
+                            : isPartner
+                              ? 'bg-purple-50/90 border border-purple-300'
+                              : 'hover:bg-slate-50 border border-slate-200/60'
+                        }" data-student-id="${s.id}">
+                          <!-- Cột chọn chính & Thông tin chi tiết -->
+                          <div class="flex items-center gap-2.5 min-w-0 flex-1">
+                            <div class="flex items-center justify-center flex-shrink-0">
+                              <input type="radio" name="primary_student" value="${s.id}" ${isPrimary ? 'checked' : ''}
+                                class="student-radio-select w-4 h-4 text-blue-600 accent-blue-600 cursor-pointer" />
+                            </div>
+                            <span class="text-[11px] font-bold text-slate-400 font-mono w-7 flex-shrink-0">
+                              #${String(s.stt).padStart(2, '0')}
+                            </span>
+                            <div class="min-w-0 flex-1">
+                              <div class="flex items-center gap-1.5 flex-wrap">
+                                <span class="text-xs md:text-sm font-bold text-slate-800 truncate ${isPrimary ? 'text-blue-900 font-extrabold' : ''}">
+                                  ${escapeHtml(s.fullName)}
+                                </span>
+                                ${isPrimary ? `
+                                  <span class="text-[10px] font-extrabold px-1.5 py-0.2 rounded bg-blue-600 text-white shadow-xs">
+                                    👑 Đăng nhập chính
+                                  </span>
+                                ` : ''}
+                                ${isPartner ? `
+                                  <span class="text-[10px] font-extrabold px-1.5 py-0.2 rounded bg-purple-600 text-white shadow-xs">
+                                    🤝 Bạn ghép cặp
+                                  </span>
+                                ` : ''}
+                              </div>
+                              <div class="flex items-center gap-3 text-[11px] text-slate-500 mt-0.5 flex-wrap">
+                                <span class="flex items-center gap-1" title="Ngày sinh">
+                                  📅 <span class="font-medium">${s.dob || '---'}</span>
+                                </span>
+                                <span class="flex items-center gap-1 font-mono text-indigo-700 font-semibold" title="Tài khoản đăng nhập">
+                                  👤 <span>${escapeHtml(s.username)}</span>
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <!-- Cột Nút tích (Checkbox) Ghép cặp -->
+                          <div class="flex-shrink-0" onclick="event.stopPropagation()">
+                            <label class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer select-none ${
+                              isPrimary
+                                ? 'opacity-40 cursor-not-allowed bg-slate-100 border-slate-200 text-slate-400'
+                                : isPartner
+                                  ? 'bg-purple-600 text-white border-purple-600 shadow-sm'
+                                  : 'bg-white hover:bg-purple-50 text-slate-700 border-slate-300 hover:border-purple-300'
+                            }" title="${isPrimary ? 'Học sinh này đang là tài khoản chính' : 'Tích chọn để ghép cặp làm bài chung nhóm'}">
+                              <input type="checkbox" class="student-partner-checkbox accent-purple-600 w-3.5 h-3.5 rounded cursor-pointer"
+                                data-student-id="${s.id}" ${isPartner ? 'checked' : ''} ${isPrimary ? 'disabled' : ''} />
+                              <span>${isPartner ? 'Đã ghép' : 'Ghép cặp'}</span>
+                            </label>
+                          </div>
+                        </div>
+                      `;
+                    }).join("")}
+                  </div>
+                </div>
+              </div>
+
+              <!-- Hướng dẫn chân trang bên trái -->
+              <div class="mt-4 pt-3 border-t border-slate-200 text-xs text-slate-500 flex flex-wrap items-center justify-between gap-2">
+                <span>💡 Mỗi máy học sinh có thể ngồi cá nhân hoặc ghép cặp 2-3 bạn làm bài chung.</span>
+                <span class="font-semibold text-blue-700">Dữ liệu chuẩn hóa 100% KNTT</span>
+              </div>
             </div>
 
-            ${
-              state.loginRoleTab === "student"
-                ? `
-              <div class="space-y-4">
-                <div class="grid grid-cols-2 gap-3">
-                  <div>
-                    <label class="block text-xs font-bold text-slate-600 uppercase mb-1">1. Chọn Khối</label>
-                    <select id="login-grade-select" class="w-full px-3 py-2.5 rounded-xl border border-slate-300 font-semibold text-sm focus:border-blue-600 focus:outline-none">
-                      ${[6, 7, 8, 9]
-                        .map(g => `<option value="${g}" ${Number(state.loginGradeFilter) === g ? "selected" : ""}>Khối ${g}</option>`)
-                        .join("")}
-                    </select>
-                  </div>
-                  <div>
-                    <label class="block text-xs font-bold text-slate-600 uppercase mb-1">2. Chọn Lớp</label>
-                    <select id="login-class-select" class="w-full px-3 py-2.5 rounded-xl border border-slate-300 font-semibold text-sm focus:border-blue-600 focus:outline-none">
-                      ${classesOfGrade
-                        .map(c => `<option value="${c.id}" ${state.loginClassFilter === c.id ? "selected" : ""}>${c.name} (${c.studentCount} HS)</option>`)
-                        .join("")}
-                    </select>
-                  </div>
+            <!-- ============================================================ -->
+            <!-- CỘT BÊN PHẢI: CỔNG ĐĂNG NHẬP (HỌC SINH / GIÁO VIÊN BẢO MẬT) -->
+            <!-- ============================================================ -->
+            <div class="lg:col-span-5 xl:col-span-4 p-5 md:p-6 bg-white flex flex-col justify-between">
+              <div>
+                <!-- Tabs chuyển đổi Cổng Học sinh / Cổng Quản trị Giáo viên -->
+                <div class="flex rounded-xl bg-slate-100 p-1 mb-5">
+                  <button id="tab-login-student" class="flex-1 py-2.5 rounded-lg text-xs md:text-sm font-bold transition ${
+                    state.loginRoleTab === "student" ? "bg-blue-600 text-white shadow" : "text-slate-600 hover:text-slate-900"
+                  }">
+                    👨‍🎓 Cổng Học sinh
+                  </button>
+                  <button id="tab-login-admin" class="flex-1 py-2.5 rounded-lg text-xs md:text-sm font-bold transition ${
+                    state.loginRoleTab === "admin" ? "bg-indigo-600 text-white shadow" : "text-slate-600 hover:text-slate-900"
+                  }">
+                    👨‍🏫 Cổng Giáo viên
+                  </button>
                 </div>
 
-                <div>
-                  <label class="block text-xs font-bold text-slate-600 uppercase mb-1">3. Chọn Họ tên Học sinh trong lớp (Tự điền Tài khoản)</label>
-                  <select id="login-student-select" class="w-full px-3 py-2.5 rounded-xl border border-slate-300 font-semibold text-sm focus:border-blue-600 focus:outline-none">
-                    ${studentsOfClass
-                      .map(
-                        s => `<option value="${s.id}" ${selectedStudent && selectedStudent.id === s.id ? "selected" : ""}>
-                          STT ${String(s.stt).padStart(2, "0")} — ${escapeHtml(s.fullName)} (${s.dob}) [TK: ${s.username}]
-                        </option>`
-                      )
-                      .join("")}
-                  </select>
-                </div>
+                ${
+                  state.loginRoleTab === "student"
+                    ? `
+                  <div class="space-y-4">
+                    <!-- Thẻ Thông tin Học sinh Đăng nhập chính -->
+                    <div class="bg-blue-50/70 border border-blue-200 rounded-2xl p-3.5">
+                      <div class="text-[11px] font-bold text-blue-800 uppercase tracking-wider mb-2 flex items-center justify-between">
+                        <span>👑 Tài khoản Đăng nhập chính</span>
+                        <span class="text-blue-700 font-mono text-[11px] bg-blue-100 px-2 py-0.5 rounded-full font-bold">
+                          ${selectedStudent?.className || ''}
+                        </span>
+                      </div>
+                      <div class="flex items-center gap-3">
+                        <div class="w-11 h-11 rounded-2xl bg-blue-600 text-white flex items-center justify-center font-extrabold text-lg shadow-md flex-shrink-0">
+                          ${selectedStudent ? selectedStudent.fullName.charAt(selectedStudent.fullName.lastIndexOf(' ') + 1) : 'HS'}
+                        </div>
+                        <div class="min-w-0 flex-1">
+                          <div class="text-sm font-extrabold text-slate-800 truncate">
+                            ${escapeHtml(selectedStudent?.fullName || 'Chưa chọn học sinh')}
+                          </div>
+                          <div class="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+                            <span class="font-mono text-indigo-700 font-semibold">${escapeHtml(selectedStudent?.username || '')}</span>
+                            <span>•</span>
+                            <span>📅 ${selectedStudent?.dob || '---'}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
 
-                <div class="grid grid-cols-2 gap-3">
-                  <div>
-                    <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Tài khoản (Username)</label>
-                    <input id="login-username-input" type="text" value="${selectedStudent ? escapeHtml(selectedStudent.username) : ""}"
-                      placeholder="VD: 7a11_anltb"
-                      class="w-full px-3 py-2.5 rounded-xl border border-slate-300 font-mono text-sm bg-slate-50 focus:bg-white focus:border-blue-600 focus:outline-none" />
+                    <!-- Thẻ Thông tin Học sinh Ghép cặp -->
+                    <div class="bg-purple-50/70 border border-purple-200 rounded-2xl p-3.5">
+                      <div class="text-[11px] font-bold text-purple-900 uppercase tracking-wider mb-2 flex items-center justify-between">
+                        <span>🤝 Học sinh Ghép cặp (${partnerStudents.length})</span>
+                        <span class="text-[10px] text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full font-medium">Cùng tính điểm nhóm</span>
+                      </div>
+                      ${partnerStudents.length > 0 ? `
+                        <div class="space-y-1.5">
+                          ${partnerStudents.map(p => `
+                            <div class="flex items-center justify-between bg-white border border-purple-200 px-3 py-2 rounded-xl text-xs shadow-xs">
+                              <div class="flex items-center gap-2 min-w-0">
+                                <span class="text-purple-600">👤</span>
+                                <span class="font-bold text-slate-800 truncate">${escapeHtml(p.fullName)}</span>
+                                <span class="text-[11px] font-mono text-purple-700">(${escapeHtml(p.username)})</span>
+                              </div>
+                              <button type="button" class="btn-remove-partner text-slate-400 hover:text-red-500 font-bold px-1.5 py-0.5 text-sm transition" data-id="${p.id}" title="Bỏ ghép cặp">
+                                ✕
+                              </button>
+                            </div>
+                          `).join("")}
+                        </div>
+                      ` : `
+                        <div class="text-xs text-purple-700/80 italic p-1">
+                          Chưa chọn bạn ghép cặp (Làm bài cá nhân). Tích vào ô <b>[Ghép cặp]</b> ở danh sách bên trái nếu ngồi chung máy.
+                        </div>
+                      `}
+                    </div>
+
+                    <!-- Ô nhập mật khẩu -->
+                    <div>
+                      <div class="flex items-center justify-between mb-1">
+                        <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                          Mật khẩu
+                        </label>
+                        <span class="text-[11px] text-slate-400">Mặc định: 123</span>
+                      </div>
+                      <input id="login-password-input" type="password" value="123"
+                        class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-bold text-sm focus:border-blue-600 focus:outline-none" />
+                    </div>
+
+                    <!-- Nút Đăng nhập -->
+                    <button id="btn-student-login" class="w-full py-3.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-extrabold text-sm md:text-base shadow-lg shadow-blue-600/30 transition-all flex items-center justify-center gap-2">
+                      <span>🚀 Đăng Nhập Vào Phòng Live & Cổng Học Tập</span>
+                    </button>
                   </div>
-                  <div>
-                    <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Mật khẩu chung</label>
-                    <input id="login-password-input" type="password" value="123"
-                      placeholder="Mật khẩu mặc định: 123"
-                      class="w-full px-3 py-2.5 rounded-xl border border-slate-300 font-bold text-sm focus:border-blue-600 focus:outline-none" />
+                `
+                    : `
+                  <!-- FORM GIÁO VIÊN (ĐÃ BỎ HOÀN TOÀN THÔNG TIN MẬT KHẨU 666) -->
+                  <div class="space-y-4">
+                    <div class="p-3.5 rounded-2xl bg-indigo-50 border border-indigo-200 text-xs text-indigo-950 leading-relaxed">
+                      <div class="font-bold flex items-center gap-1.5 mb-1 text-indigo-900 text-sm">
+                        <span>👨‍🏫</span> Cổng Quản Trị Dành Cho Giáo Viên
+                      </div>
+                      Quản lý phòng học Live, giám sát máy học sinh, giao đề kiểm tra định kỳ có kiểm soát và chấm bài thực hành.
+                    </div>
+                    <div>
+                      <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Tài khoản Quản trị</label>
+                      <input id="admin-username-input" type="text" value="admin"
+                        class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-mono text-sm focus:border-indigo-600 focus:outline-none" />
+                    </div>
+                    <div>
+                      <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Mật khẩu Quản trị</label>
+                      <input id="admin-password-input" type="password" value="" placeholder="Nhập mật khẩu quản trị"
+                        class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-bold text-sm focus:border-indigo-600 focus:outline-none" />
+                    </div>
+                    <button id="btn-admin-login" class="w-full py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-sm md:text-base shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2">
+                      <span>🔐 Đăng Nhập Cổng Giáo Viên</span>
+                    </button>
                   </div>
-                </div>
-
-                <div class="bg-blue-50 border border-blue-200 rounded-xl p-3">
-                  <label class="block text-xs font-bold text-blue-900 uppercase mb-1">
-                    🤝 Ghép cặp Nhóm máy (Tùy chọn bạn cùng bàn để cộng điểm chung cho nhóm):
-                  </label>
-                  <select id="login-partner-select" class="w-full px-3 py-2 rounded-lg border border-blue-300 text-sm bg-white">
-                    <option value="">-- Làm cá nhân hoặc chọn bạn ghép cặp sau --</option>
-                    ${studentsOfClass
-                      .filter(s => !selectedStudent || s.id !== selectedStudent.id)
-                      .map(s => `<option value="${s.id}">Ghép cặp với: ${escapeHtml(s.fullName)} (${s.username})</option>`)
-                      .join("")}
-                  </select>
-                </div>
-
-                <button id="btn-student-login" class="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-base shadow-lg shadow-blue-600/25 transition">
-                  🚀 Đăng nhập Vào Phòng Live & Cổng Học Tập
-                </button>
+                `
+                }
               </div>
-            `
-                : `
-              <div class="space-y-4">
-                <div class="p-4 rounded-xl bg-indigo-50 border border-indigo-200 text-xs text-indigo-900">
-                  <b>Tài khoản Quản trị Giáo viên:</b> Tài khoản mặc định <code>admin</code> — Mật khẩu: <code>666</code>
-                </div>
-                <div>
-                  <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Tài khoản Quản trị</label>
-                  <input id="admin-username-input" type="text" value="admin"
-                    class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-mono text-sm" />
-                </div>
-                <div>
-                  <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Mật khẩu Giáo viên (666)</label>
-                  <input id="admin-password-input" type="password" value="666" placeholder="Nhập mật khẩu 666"
-                    class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-bold text-sm" />
-                </div>
-                <button id="btn-admin-login" class="w-full py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-base shadow-lg shadow-indigo-600/25 transition">
-                  🔐 Đăng nhập Cổng Quản trị Giáo viên
-                </button>
+
+              <div class="mt-6 pt-4 border-t border-slate-200 text-xs text-slate-400 text-center">
+                THCS Mão Điền • Phòng Thực Hành Tin Học • GitHub Pages
               </div>
-            `
-            }
+            </div>
           </div>
         </div>
       </div>
@@ -300,59 +486,119 @@
     if (tabSt) tabSt.onclick = () => { state.loginRoleTab = "student"; renderApp(); };
     if (tabAd) tabAd.onclick = () => { state.loginRoleTab = "admin"; renderApp(); };
 
-    const gradeSel = document.getElementById("login-grade-select");
-    if (gradeSel) {
-      gradeSel.onchange = (e) => {
-        state.loginGradeFilter = Number(e.target.value);
-        state.loginSelectedStudentId = "";
+    // Chọn Khối lớp (Khối 6, 7, 8, 9)
+    const gradeButtons = document.querySelectorAll(".btn-grade-chip");
+    gradeButtons.forEach(btn => {
+      btn.onclick = (e) => {
+        const grade = Number(e.currentTarget.dataset.grade);
+        state.loginGradeFilter = grade;
+        const db = Store.loadStudentsDB();
+        const classes = db.classes.filter(c => Number(c.grade) === grade);
+        if (classes.length > 0) {
+          state.loginClassFilter = classes[0].id;
+          const students = db.students.filter(s => s.className === state.loginClassFilter);
+          state.loginSelectedStudentId = students[0]?.id || "";
+        }
+        state.loginPartnerStudentIds = [];
+        state.loginSearchQuery = "";
         renderApp();
+      };
+    });
+
+    // Chọn Lớp học theo hàng ngang
+    const classButtons = document.querySelectorAll(".btn-class-chip");
+    classButtons.forEach(btn => {
+      btn.onclick = (e) => {
+        const classId = e.currentTarget.dataset.classId;
+        state.loginClassFilter = classId;
+        const db = Store.loadStudentsDB();
+        const students = db.students.filter(s => s.className === classId);
+        state.loginSelectedStudentId = students[0]?.id || "";
+        state.loginPartnerStudentIds = [];
+        state.loginSearchQuery = "";
+        renderApp();
+      };
+    });
+
+    // Tìm kiếm nhanh học sinh (Lọc DOM tức thời không làm mất tiêu điểm gõ)
+    const searchInput = document.getElementById("login-student-search-input");
+    if (searchInput) {
+      searchInput.oninput = (e) => {
+        const q = e.target.value.toLowerCase().trim();
+        state.loginSearchQuery = e.target.value;
+        const rows = document.querySelectorAll(".student-item-row");
+        rows.forEach(row => {
+          const text = row.textContent.toLowerCase();
+          row.style.display = text.includes(q) ? "" : "none";
+        });
       };
     }
 
-    const classSel = document.getElementById("login-class-select");
-    if (classSel) {
-      classSel.onchange = (e) => {
-        state.loginClassFilter = e.target.value;
-        state.loginSelectedStudentId = "";
+    // Chọn Học sinh làm tài khoản Đăng nhập chính (Nhấp vào dòng hoặc Radio)
+    const studentRows = document.querySelectorAll(".student-item-row");
+    studentRows.forEach(row => {
+      row.onclick = (e) => {
+        // Nếu nhấp vào checkbox ghép cặp thì không kích hoạt chọn chính
+        if (e.target.closest(".student-partner-checkbox") || e.target.closest("label")) return;
+        const stId = row.dataset.studentId;
+        state.loginSelectedStudentId = stId;
+        // Bỏ học sinh này khỏi danh sách ghép cặp nếu đã tích trước đó
+        state.loginPartnerStudentIds = (state.loginPartnerStudentIds || []).filter(id => id !== stId);
         renderApp();
       };
-    }
+    });
 
-    const stSel = document.getElementById("login-student-select");
-    if (stSel) {
-      stSel.onchange = (e) => {
-        state.loginSelectedStudentId = e.target.value;
+    // Tích chọn học sinh ghép cặp (Checkbox)
+    const partnerCheckboxes = document.querySelectorAll(".student-partner-checkbox");
+    partnerCheckboxes.forEach(cb => {
+      cb.onchange = (e) => {
+        e.stopPropagation();
+        const stId = cb.dataset.studentId;
+        if (!state.loginPartnerStudentIds) state.loginPartnerStudentIds = [];
+        if (cb.checked) {
+          if (!state.loginPartnerStudentIds.includes(stId)) {
+            state.loginPartnerStudentIds.push(stId);
+          }
+        } else {
+          state.loginPartnerStudentIds = state.loginPartnerStudentIds.filter(id => id !== stId);
+        }
         renderApp();
       };
-    }
+    });
 
+    // Nút bỏ ghép cặp (x) ở thẻ bên phải
+    const removePartnerBtns = document.querySelectorAll(".btn-remove-partner");
+    removePartnerBtns.forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const stId = btn.dataset.id;
+        state.loginPartnerStudentIds = (state.loginPartnerStudentIds || []).filter(id => id !== stId);
+        renderApp();
+      };
+    });
+
+    // Đăng nhập Cổng Học sinh
     const btnStLogin = document.getElementById("btn-student-login");
     if (btnStLogin) {
       btnStLogin.onclick = () => {
         const db = Store.loadStudentsDB();
-        const uname = (document.getElementById("login-username-input")?.value || "").trim().toLowerCase();
         const pwd = (document.getElementById("login-password-input")?.value || "").trim();
-        const partnerId = document.getElementById("login-partner-select")?.value || "";
 
-        const found = db.students.find(s => s.username.toLowerCase() === uname);
+        const found = db.students.find(s => s.id === state.loginSelectedStudentId);
         if (!found) {
-          showToast("Không tìm thấy tài khoản học sinh: " + uname, "error");
+          showToast("Vui lòng chọn một học sinh trong danh sách để đăng nhập!", "error");
           return;
         }
         if (String(found.password || "123") !== pwd) {
-          showToast("Mật khẩu không đúng (Mật khẩu mặc định là 123)", "error");
+          showToast("Mật khẩu không đúng! (Mật khẩu mặc định là 123)", "error");
           return;
         }
 
-        const memberIds = [found.id];
-        let memberNames = [found.fullName];
-        if (partnerId && partnerId !== found.id) {
-          const partner = db.students.find(s => s.id === partnerId);
-          if (partner) {
-            memberIds.push(partner.id);
-            memberNames.push(partner.fullName);
-          }
-        }
+        const memberIds = [found.id, ...state.loginPartnerStudentIds.filter(id => id !== found.id)];
+        const memberNames = memberIds.map(id => {
+          const st = db.students.find(s => s.id === id);
+          return st ? st.fullName : id;
+        });
 
         const gName = found.defaultGroup || `Nhóm Máy ${String(found.seatNumber || 1).padStart(2, "0")}`;
         state.partnerIds = memberIds;
@@ -381,15 +627,19 @@
         };
         sessionStorage.setItem(Store.STORAGE_KEYS.SESSION_USER, JSON.stringify(state.currentUser));
         showToast(`Xin chào ${memberNames.join(" & ")} (${found.className})!`);
+        renderApp();
       };
     }
 
+    // Đăng nhập Cổng Quản trị Giáo viên (Không để lộ mật khẩu)
     const btnAdLogin = document.getElementById("btn-admin-login");
     if (btnAdLogin) {
       btnAdLogin.onclick = () => {
         const pwd = (document.getElementById("admin-password-input")?.value || "").trim();
-        if (pwd !== "666") {
-          showToast("Sai mật khẩu Quản trị viên! (Mật khẩu chuẩn: 666)", "error");
+        const db = Store.loadStudentsDB();
+        const expectedPwd = (db.adminAccount && db.adminAccount.password) ? db.adminAccount.password : "666";
+        if (pwd !== expectedPwd) {
+          showToast("Mật khẩu Quản trị viên không chính xác! Vui lòng thử lại.", "error");
           return;
         }
         state.currentUser = {
@@ -399,6 +649,7 @@
         };
         sessionStorage.setItem(Store.STORAGE_KEYS.SESSION_USER, JSON.stringify(state.currentUser));
         showToast("Đã đăng nhập Cổng Quản trị Giáo viên!");
+        renderApp();
       };
     }
   }
@@ -2018,7 +2269,7 @@
   }
 
   // ============================================================================
-  // 3. CỔNG QUẢN TRỊ GIÁO VIÊN (MẬT KHẨU 666)
+  // 3. CỔNG QUẢN TRỊ GIÁO VIÊN
   // ============================================================================
   function renderAdminPortal() {
     const live = Store.loadLiveState();
