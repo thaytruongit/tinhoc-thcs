@@ -22,11 +22,18 @@
     examAnswers: {},
     examTimeLeftSec: 0,
     examTimerInterval: null,
-    // Activity 1 & 2 interactive state
+    examViolationsCount: 0,
+    examPenaltyPoints: 0,
+    showViolationModal: false,
+    examSubmitResult: null,
+    // Activity 1 & 2 interactive state (Đủ 4 dạng)
+    wsDragDropAssignments: {}, // { [itemId]: 'A' | 'B' }
     wsFillAnswers: {},
+    wsMatchingAssignments: {}, // { [pairId]: rightText }
     wsGroupAnswers: {},
     mgSelectedAnswers: {},
     mgSubmittedLessonId: null,
+    isMqttConnected: false,
     // Admin Portal state
     adminTab: "live", // 'live' | 'students' | 'reports' | 'config'
     adminGradeFilter: "ALL",
@@ -56,6 +63,13 @@
     };
   }
   window.addEventListener("APP_REALTIME_SYNC", () => {
+    renderApp();
+  });
+  window.addEventListener("MQTT_STATUS_CHANGED", (e) => {
+    state.isMqttConnected = !!(e.detail && e.detail.connected);
+    renderApp();
+  });
+  window.addEventListener("EXAM_SESSION_SYNC", () => {
     renderApp();
   });
   window.addEventListener("storage", () => {
@@ -489,10 +503,39 @@
   // 2.1. PHÒNG LIVE TRÊN LỚP (GHÉP CẶP NHÓM & 3 HOẠT ĐỘNG DO GIÁO VIÊN ĐIỀU PHỐI)
   // ----------------------------------------------------------------------------
   function renderStudentLiveClassroom(student, live, db) {
-    // Lấy bài học đang được Giáo viên mở (hoặc theo khối của học sinh)
+    // Kiểm tra phân quyền: Lớp của học sinh có đang được phát Live không?
+    const isClassLive = !live.className || live.className.toUpperCase() === student.className.toUpperCase();
     const activeLesson = getLesson(live.grade || student.grade, live.period || 1);
     const sameClassPeers = db.students.filter(s => s.className === student.className && s.id !== student.id);
     const currentPartnerId = state.partnerIds.find(id => id !== student.id) || "";
+
+    if (!isClassLive) {
+      return `
+        <div class="space-y-6">
+          <div class="bg-amber-50 border-2 border-amber-300 rounded-3xl p-8 text-center space-y-4 shadow-sm">
+            <div class="w-16 h-16 rounded-full bg-amber-100 border border-amber-300 flex items-center justify-center text-3xl mx-auto">
+              📡
+            </div>
+            <h3 class="text-xl font-extrabold text-amber-950">
+              Phòng Live hiện tại của Thầy đang mở cho Lớp ${escapeHtml(live.className)} (Tiết ${live.period})
+            </h3>
+            <p class="text-sm text-amber-900 max-w-xl mx-auto leading-relaxed">
+              Lớp <b>${escapeHtml(student.className)}</b> của em hiện chưa đến giờ phát live. Hệ thống sẽ <b>tự động kết nối và mở màn hình Live</b> ngay khi Thầy chuyển sang tiết dạy của lớp em!
+            </p>
+            <div class="pt-3 flex flex-wrap justify-center gap-3">
+              <button onclick="document.querySelector('[data-st-tab=\'preclass\']').click()"
+                class="px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-md transition">
+                📖 Mở Cổng Tự Học: Tìm hiểu bài trước (+50 XP)
+              </button>
+              <button onclick="document.querySelector('[data-st-tab=\'practice\']').click()"
+                class="px-5 py-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs shadow-md transition">
+                🎯 Tự Ôn luyện 29 Tiết
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
 
     return `
       <div class="space-y-5">
@@ -585,97 +628,263 @@
     const ws = act1.worksheet;
     const nb = act1.notebookSlide;
 
+    const dd = ws.dragDrop || { bucketA: "Hộp A", bucketB: "Hộp B", items: [] };
+    const fbList = ws.fillBlanks || [];
+    const mpList = ws.matchingPairs || [];
+    const gqList = ws.groupQuestions || [];
+
+    // Danh sách các vế phải để nối cột
+    const rightOptions = mpList.map(m => m.right);
+
     return `
-      <div class="space-y-5">
+      <div class="space-y-6">
         ${
           live.showNotebookSlide
             ? `
-          <!-- SLIDE KIẾN THỨC GHI VỞ DO GIÁO VIÊN BẬT -->
-          <div class="notebook-paper">
-            <div class="flex items-center justify-between border-b-2 border-amber-400 pb-3 mb-4">
-              <h3 class="text-lg font-extrabold text-amber-950">${escapeHtml(nb.slideTitle)}</h3>
-              <span class="px-3 py-1 rounded-full bg-amber-600 text-white text-xs font-bold">
-                ✍️ HỌC SINH GHI NỘI DUNG TRỌNG TÂM VÀO VỞ
-              </span>
-            </div>
-            <div class="space-y-3 text-slate-900 font-medium text-base">
-              ${nb.coreConcepts.map(line => `<p class="leading-relaxed">${escapeHtml(line)}</p>`).join("")}
-            </div>
-            <div class="mt-4 pt-3 border-t border-amber-300 flex flex-wrap gap-2 items-center">
-              <span class="text-xs font-bold text-amber-900 uppercase">Từ khóa cốt lõi:</span>
-              ${nb.keyTerms.map(t => `<span class="px-2.5 py-1 rounded-lg bg-amber-200/80 text-amber-950 text-xs font-bold">${escapeHtml(t)}</span>`).join("")}
+          <!-- HỘP GHI NHỚ SÁCH GIÁO KHOA KẾT NỐI TRI THỨC (CHUẨN HỘP CAM NGUYÊN VĂN SGK) -->
+          <div class="sgk-ghi-nho-container">
+            <div class="sgk-mascot-badge">💡</div>
+            <div class="sgk-ghi-nho-box">
+              <div class="flex items-center justify-between border-b border-white/25 pb-3 mb-4">
+                <div>
+                  <span class="text-xs uppercase tracking-wider font-extrabold text-amber-200">
+                    📖 Ghi nhớ Sách Giáo Khoa Kết nối tri thức với cuộc sống
+                  </span>
+                  <h3 class="text-xl font-extrabold text-white mt-0.5">${escapeHtml(nb.slideTitle || lesson.title)}</h3>
+                </div>
+                <span class="px-3.5 py-1.5 rounded-full bg-white/20 backdrop-blur text-white text-xs font-bold shadow-sm">
+                  ✍️ HỌC SINH GHI NỘI DUNG VÀO VỞ
+                </span>
+              </div>
+
+              <!-- Nội dung nguyên văn từng dấu chấm tròn -->
+              <div class="space-y-2.5">
+                ${(nb.sgkGhiNho || nb.coreConcepts || []).map(b => `
+                  <div class="sgk-ghi-nho-bullet">
+                    ${escapeHtml(b.replace(/^•\s*/, ''))}
+                  </div>
+                `).join("")}
+              </div>
+
+              <!-- Thẻ chân trang: Mục kiến thức SGK & Năng lực số / AI -->
+              <div class="mt-5 pt-3.5 border-t border-white/20 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-100">
+                <div>
+                  <b>Mục kiến thức SGK:</b> ${escapeHtml(nb.sgkSection || lesson.mucKT || "Mục trọng tâm")}
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="px-2.5 py-0.5 rounded-full bg-white/15">🎯 NLS: ${escapeHtml(lesson.nlsTarget?.split(':')[0] || 'CV3456')}</span>
+                  <span class="px-2.5 py-0.5 rounded-full bg-white/15">🤖 AI: ${escapeHtml(lesson.aiTarget?.split(':')[0] || 'QĐ3439')}</span>
+                </div>
+              </div>
             </div>
           </div>
         `
             : ""
         }
 
-        <!-- PHIẾU HỌC TẬP ĐIỆN TỬ NHÓM -->
-        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
-          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-4">
+        <!-- PHIẾU HỌC TẬP ĐIỆN TỬ NHÓM (ĐỦ 4 DẠNG) -->
+        <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 md:p-8 space-y-7">
+          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
             <div>
-              <span class="text-xs font-bold text-blue-600 uppercase">Hoạt động Thảo luận Nhóm Cặp đôi</span>
-              <h3 class="text-lg font-extrabold text-slate-900">${escapeHtml(ws.worksheetTitle)}</h3>
+              <div class="flex items-center gap-2">
+                <span class="px-2.5 py-0.5 rounded-md bg-blue-100 text-blue-800 text-xs font-bold uppercase">
+                  Hoạt động 1: Khám phá Kiến thức mới
+                </span>
+                <span class="text-xs text-slate-500 font-bold">• 4 Dạng tương tác Nhóm</span>
+              </div>
+              <h3 class="text-xl font-extrabold text-slate-900 mt-1">${escapeHtml(ws.worksheetTitle)}</h3>
             </div>
-            <span class="px-3 py-1 rounded-full bg-blue-100 text-blue-800 text-xs font-bold">
-              Điểm cộng đồng thời cho cả nhóm (+100 XP)
+            <span class="px-3.5 py-1.5 rounded-full bg-blue-600 text-white text-xs font-bold shadow-sm">
+              🤝 Điểm thành tích tính chung cho Nhóm (+100 XP)
             </span>
           </div>
 
-          <!-- Hộp từ khóa gợi ý -->
-          <div class="bg-slate-50 rounded-xl p-4 border border-slate-200">
-            <div class="text-xs font-bold text-slate-500 uppercase mb-2">
-              💡 Hộp Từ khóa Gợi ý (Bấm hoặc gõ từ khóa vào ô trống bên dưới):
-            </div>
-            <div class="flex flex-wrap gap-2">
-              ${ws.wordBank.map(w => `<span class="word-chip">${escapeHtml(w)}</span>`).join("")}
-            </div>
-          </div>
+          <!-- DẠNG 1: KÉO THẢ PHÂN LOẠI (DRAG & DROP) -->
+          ${
+            dd.items && dd.items.length > 0
+              ? `
+            <div class="space-y-4 p-5 rounded-2xl bg-blue-50/60 border border-blue-200">
+              <div class="flex items-center justify-between">
+                <h4 class="font-extrabold text-sm text-blue-950 uppercase flex items-center gap-2">
+                  <span class="w-6 h-6 rounded-lg bg-blue-600 text-white flex items-center justify-center text-xs">1</span>
+                  <span>Dạng 1: Phân loại đối tượng vào 2 Hộp</span>
+                </h4>
+                <span class="text-xs font-bold text-blue-800">Bấm nút [A] hoặc [B] tương ứng cho mỗi thẻ</span>
+              </div>
 
-          <!-- Phần 1: Điền khuyết hoàn thành khái niệm SGK -->
-          <div class="space-y-3">
-            <h4 class="font-bold text-sm text-slate-800 uppercase">Phần I. Hoàn thành khái niệm trọng tâm:</h4>
-            ${ws.fillBlanks
-              .map(
-                (fb, idx) => `
-              <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
-                <div class="text-sm font-medium text-slate-800">
-                  <b>Câu ${idx + 1}:</b> ${escapeHtml(fb.statement)}
+              <!-- 2 Hộp Phân loại -->
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="bucket-card border-blue-400 bg-white shadow-sm p-4 rounded-xl">
+                  <div class="font-extrabold text-sm text-blue-700 flex items-center gap-1.5 pb-2 border-b border-blue-100">
+                    <span>📦 HỘP A:</span>
+                    <span>${escapeHtml(dd.bucketA)}</span>
+                  </div>
+                  <div class="mt-2 text-xs text-slate-500">Các mục được xếp vào Hộp A:</div>
+                  <div class="mt-2 space-y-1.5 min-h-[50px]">
+                    ${dd.items
+                      .filter(it => state.wsDragDropAssignments[it.id] === "A")
+                      .map(it => `<div class="px-2.5 py-1.5 rounded-lg bg-blue-100 text-blue-900 font-bold text-xs flex justify-between items-center">
+                        <span>• ${escapeHtml(it.text)}</span>
+                        <span class="text-[10px] text-blue-600">Đã chọn A</span>
+                      </div>`)
+                      .join("")}
+                  </div>
                 </div>
-                <div class="flex items-center gap-2">
-                  <span class="text-xs font-bold text-blue-700">Điền từ khóa:</span>
-                  <select data-ws-fb="${fb.id}" class="ws-fb-input px-3 py-1.5 rounded-lg border border-slate-300 text-sm font-bold bg-white">
-                    <option value="">-- Chọn từ khóa phù hợp --</option>
-                    ${ws.wordBank.map(w => `<option value="${escapeHtml(w)}">${escapeHtml(w)}</option>`).join("")}
-                  </select>
+
+                <div class="bucket-card border-indigo-400 bg-white shadow-sm p-4 rounded-xl">
+                  <div class="font-extrabold text-sm text-indigo-700 flex items-center gap-1.5 pb-2 border-b border-indigo-100">
+                    <span>📦 HỘP B:</span>
+                    <span>${escapeHtml(dd.bucketB)}</span>
+                  </div>
+                  <div class="mt-2 text-xs text-slate-500">Các mục được xếp vào Hộp B:</div>
+                  <div class="mt-2 space-y-1.5 min-h-[50px]">
+                    ${dd.items
+                      .filter(it => state.wsDragDropAssignments[it.id] === "B")
+                      .map(it => `<div class="px-2.5 py-1.5 rounded-lg bg-indigo-100 text-indigo-900 font-bold text-xs flex justify-between items-center">
+                        <span>• ${escapeHtml(it.text)}</span>
+                        <span class="text-[10px] text-indigo-600">Đã chọn B</span>
+                      </div>`)
+                      .join("")}
+                  </div>
                 </div>
               </div>
-            `
-              )
-              .join("")}
-          </div>
 
-          <!-- Phần 2: Thảo luận tình huống nhóm -->
-          <div class="space-y-3">
-            <h4 class="font-bold text-sm text-slate-800 uppercase">Phần II. Thảo luận Tình huống Thực tế:</h4>
-            <div class="p-4 rounded-xl bg-indigo-50 border border-indigo-200 text-sm text-indigo-950 font-medium">
-              <b>Tình huống:</b> ${escapeHtml(ws.discussionPrompt)}
-            </div>
-            ${ws.groupQuestions
-              .map(
-                gq => `
-              <div class="space-y-1.5">
-                <label class="block text-sm font-bold text-slate-700">${escapeHtml(gq.label)} ${escapeHtml(gq.question)}</label>
-                <textarea data-ws-gq="${gq.id}" rows="2" placeholder="Nhóm thảo luận và nhập câu trả lời..."
-                  class="ws-gq-input w-full px-3.5 py-2 rounded-xl border border-slate-300 text-sm focus:border-blue-600 focus:outline-none"></textarea>
+              <!-- Danh sách các thẻ cần phân loại -->
+              <div class="space-y-2 pt-2">
+                <div class="text-xs font-bold text-slate-700 uppercase">Danh sách thẻ cần phân loại:</div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                  ${dd.items.map((it, idx) => {
+                    const currentBox = state.wsDragDropAssignments[it.id] || "";
+                    return `
+                      <div class="p-3 rounded-xl bg-white border border-slate-200 flex items-center justify-between gap-2 shadow-xs">
+                        <span class="text-xs font-semibold text-slate-800"><b>${idx + 1}.</b> ${escapeHtml(it.text)}</span>
+                        <div class="flex items-center gap-1 shrink-0">
+                          <button data-dd-id="${it.id}" data-dd-box="A"
+                            class="dd-toggle-btn px-2.5 py-1 rounded-lg text-xs font-extrabold transition ${
+                              currentBox === "A" ? "bg-blue-600 text-white shadow-xs" : "bg-slate-100 text-slate-600 hover:bg-blue-50"
+                            }">
+                            Hộp A
+                          </button>
+                          <button data-dd-id="${it.id}" data-dd-box="B"
+                            class="dd-toggle-btn px-2.5 py-1 rounded-lg text-xs font-extrabold transition ${
+                              currentBox === "B" ? "bg-indigo-600 text-white shadow-xs" : "bg-slate-100 text-slate-600 hover:bg-indigo-50"
+                            }">
+                            Hộp B
+                          </button>
+                        </div>
+                      </div>
+                    `;
+                  }).join("")}
+                </div>
               </div>
-            `
-              )
-              .join("")}
+            </div>
+          `
+              : ""
+          }
+
+          <!-- DẠNG 2: ĐIỀN KHUYẾT TỪ KHÓA (FILL-IN-THE-BLANKS) -->
+          <div class="space-y-4 p-5 rounded-2xl bg-amber-50/60 border border-amber-200">
+            <h4 class="font-extrabold text-sm text-amber-950 uppercase flex items-center gap-2">
+              <span class="w-6 h-6 rounded-lg bg-amber-600 text-white flex items-center justify-center text-xs">2</span>
+              <span>Dạng 2: Điền khuyết hoàn thành định nghĩa SGK</span>
+            </h4>
+
+            <!-- Hộp từ khóa gợi ý -->
+            <div class="bg-white rounded-xl p-3.5 border border-amber-200">
+              <div class="text-xs font-bold text-amber-900 uppercase mb-2">
+                💡 Ngân hàng từ khóa gợi ý:
+              </div>
+              <div class="flex flex-wrap gap-2">
+                ${ws.wordBank.map(w => `<span class="word-chip">${escapeHtml(w)}</span>`).join("")}
+              </div>
+            </div>
+
+            <div class="space-y-3">
+              ${fbList.map((fb, idx) => `
+                <div class="p-3.5 rounded-xl bg-white border border-slate-200 space-y-2">
+                  <div class="text-sm font-medium text-slate-800">
+                    <b>Câu ${idx + 1}:</b> ${escapeHtml(fb.statement)}
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-xs font-bold text-amber-800">Chọn từ điền vào chỗ trống:</span>
+                    <select data-ws-fb="${fb.id}" class="ws-fb-input px-3 py-1.5 rounded-lg border border-amber-300 text-sm font-bold bg-white">
+                      <option value="">-- Chọn từ khóa phù hợp --</option>
+                      ${ws.wordBank.map(w => `<option value="${escapeHtml(w)}">${escapeHtml(w)}</option>`).join("")}
+                    </select>
+                  </div>
+                </div>
+              `).join("")}
+            </div>
           </div>
 
-          <button id="btn-submit-worksheet" class="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-lg transition">
-            📤 Nộp Phiếu Học Tập Nhóm (Tính điểm cho cả Nhóm)
+          <!-- DẠNG 3: NỐI CỘT A VÀ B (MATCHING PAIRS) -->
+          ${
+            mpList && mpList.length > 0
+              ? `
+            <div class="space-y-4 p-5 rounded-2xl bg-emerald-50/60 border border-emerald-200">
+              <h4 class="font-extrabold text-sm text-emerald-950 uppercase flex items-center gap-2">
+                <span class="w-6 h-6 rounded-lg bg-emerald-600 text-white flex items-center justify-center text-xs">3</span>
+                <span>Dạng 3: Nối cột Khái niệm (Cột A) với Ý nghĩa tương ứng (Cột B)</span>
+              </h4>
+
+              <div class="space-y-3">
+                ${mpList.map((mp, idx) => {
+                  const assigned = state.wsMatchingAssignments[mp.id] || "";
+                  return `
+                    <div class="p-3.5 rounded-xl bg-white border border-slate-200 grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+                      <div class="md:col-span-5 font-bold text-sm text-slate-900">
+                        <span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs mr-1.5">${idx + 1}</span>
+                        ${escapeHtml(mp.left)}
+                      </div>
+                      <div class="md:col-span-2 text-center text-xs font-extrabold text-emerald-700">
+                        ➔ Ghép với ➔
+                      </div>
+                      <div class="md:col-span-5">
+                        <select data-ws-mp="${mp.id}" class="ws-mp-select w-full px-3 py-2 rounded-lg border border-emerald-300 text-xs font-semibold bg-white">
+                          <option value="">-- Chọn nội dung cột B phù hợp --</option>
+                          ${rightOptions.map(opt => `
+                            <option value="${escapeHtml(opt)}" ${assigned === opt ? "selected" : ""}>
+                              ${escapeHtml(opt)}
+                            </option>
+                          `).join("")}
+                        </select>
+                      </div>
+                    </div>
+                  `;
+                }).join("")}
+              </div>
+            </div>
+          `
+              : ""
+          }
+
+          <!-- DẠNG 4: THẢO LUẬN TÌNH HUỐNG THỰC TẾ (GROUP DISCUSSION) -->
+          <div class="space-y-4 p-5 rounded-2xl bg-indigo-50/60 border border-indigo-200">
+            <h4 class="font-extrabold text-sm text-indigo-950 uppercase flex items-center gap-2">
+              <span class="w-6 h-6 rounded-lg bg-indigo-600 text-white flex items-center justify-center text-xs">4</span>
+              <span>Dạng 4: Thảo luận Tình huống Thực tế & Vận dụng Năng lực số / AI</span>
+            </h4>
+
+            <div class="p-4 rounded-xl bg-white border border-indigo-200 text-sm text-indigo-950 font-medium leading-relaxed">
+              <b>📌 Tình huống thảo luận:</b> ${escapeHtml(ws.discussionPrompt)}
+            </div>
+
+            <div class="space-y-3">
+              ${gqList.map(gq => `
+                <div class="space-y-1.5">
+                  <label class="block text-sm font-bold text-slate-800">
+                    ${escapeHtml(gq.label)} ${escapeHtml(gq.question)}
+                  </label>
+                  <textarea data-ws-gq="${gq.id}" rows="2" placeholder="Nhóm cùng thảo luận và nhập câu trả lời..."
+                    class="ws-gq-input w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:border-indigo-600 focus:outline-none bg-white"></textarea>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+
+          <!-- NÚT NỘP PHIẾU HỌC TẬP -->
+          <button id="btn-submit-worksheet" class="w-full py-4 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white font-extrabold text-base shadow-xl transition flex items-center justify-center gap-2">
+            <span>📤 Nộp Phiếu Học Tập Nhóm (Chấm điểm & Cộng XP cho cả Nhóm)</span>
           </button>
         </div>
       </div>
@@ -928,96 +1137,229 @@
   }
 
   function renderStudentPeriodicExams(student) {
-    const exams = Curriculum.periodicExams.filter(e => Number(e.grade) === Number(student.grade));
-    const activeExam = exams.find(e => e.id === state.activeExamId);
+    const allExams = Curriculum.periodicExams || [];
+    const examsOfGrade = allExams.filter(e => Number(e.grade) === Number(student.grade));
+    const activeSession = Store.getActiveExamSession();
 
-    if (!activeExam) {
+    // Kiểm tra xem Giáo viên đã giao đề cho lớp của học sinh này chưa?
+    const isExamAssignedToMe = activeSession && activeSession.status === "active"
+      && (activeSession.targetClass === "ALL" || activeSession.targetClass.toUpperCase() === student.className.toUpperCase())
+      && Number(activeSession.grade) === Number(student.grade);
+
+    const activeExam = isExamAssignedToMe
+      ? allExams.find(e => e.id === activeSession.examId) || examsOfGrade[0]
+      : null;
+
+    // Nếu học sinh đang trong trạng thái làm bài thi
+    if (state.activeExamId && activeExam && activeExam.id === state.activeExamId) {
+      const minutes = Math.floor(state.examTimeLeftSec / 60);
+      const seconds = state.examTimeLeftSec % 60;
+      const timeStr = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+      const penalty = (state.examViolationsCount * Number(activeSession.deductionPerViolation || 0.5)).toFixed(1);
+
       return `
-        <div class="bg-white rounded-2xl border border-slate-200 p-6 space-y-5">
-          <div>
-            <span class="text-xs font-bold text-indigo-600 uppercase">Khảo thí Chuẩn Ma trận Đặc tả Bộ GD&ĐT</span>
-            <h2 class="text-xl font-extrabold text-slate-900">📝 Bài Kiểm tra Định kỳ — Khối ${student.grade}</h2>
+        <!-- Overlay cảnh báo vi phạm khi học sinh chuyển tab -->
+        ${
+          state.showViolationModal
+            ? `
+          <div class="anticheat-violation-overlay">
+            <div class="w-20 h-20 rounded-full bg-white/20 border-2 border-white flex items-center justify-center text-4xl mb-4 animate-bounce">
+              🚨
+            </div>
+            <h2 class="text-3xl font-extrabold mb-2">CẢNH BÁO VI PHẠM QUY CHẾ THI!</h2>
+            <p class="max-w-xl text-lg text-red-100 font-medium leading-relaxed mb-4">
+              Em vừa <b>chuyển sang tab khác hoặc rời khỏi cửa sổ bài thi</b>! Hệ thống giám sát đã tự động ghi nhận nhật ký vi phạm gửi về máy Giáo viên.
+            </p>
+            <div class="p-4 rounded-2xl bg-black/30 border border-white/20 text-sm font-bold space-y-1 mb-6">
+              <div>⚠️ Số lần vi phạm hiện tại: <span class="text-yellow-300 text-lg">${state.examViolationsCount}</span> / ${activeSession.maxViolations} lần</div>
+              <div>📉 Điểm bị trừ phạt: <span class="text-yellow-300 text-lg">-${penalty}</span> điểm</div>
+              <div class="text-xs text-red-200 pt-1">Lưu ý: Nếu vi phạm quá ${activeSession.maxViolations} lần, hệ thống sẽ TỰ ĐỘNG THU BÀI và khóa bài thi ngay lập tức!</div>
+            </div>
+            <button id="btn-dismiss-violation" class="px-8 py-3.5 rounded-2xl bg-white text-red-700 hover:bg-red-50 font-extrabold text-base shadow-2xl transition">
+              Tôi cam kết quay lại làm bài và không tái phạm
+            </button>
           </div>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            ${exams
-              .map(ex => {
-                const prev = (student.examScores || {})[ex.id];
+        `
+            : ""
+        }
+
+        <!-- GIAO DIỆN LÀM BÀI THI CÓ KIỂM SOÁT -->
+        <div class="no-select space-y-6">
+          <!-- Thanh trạng thái bài thi bám dính (Sticky Bar) -->
+          <div class="bg-gradient-to-r from-indigo-900 via-slate-900 to-purple-950 rounded-2xl p-5 text-white shadow-xl sticky top-20 z-20 flex flex-wrap items-center justify-between gap-4 border border-indigo-700/50">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="inline-block w-2.5 h-2.5 rounded-full bg-red-500 animate-ping"></span>
+                <span class="text-xs uppercase tracking-wider font-extrabold text-red-300">
+                  CHẾ ĐỘ THI CÓ KIỂM SOÁT • LỚP ${escapeHtml(student.className)}
+                </span>
+              </div>
+              <h2 class="text-lg font-extrabold mt-0.5">${escapeHtml(activeExam.title)}</h2>
+              <div class="text-xs text-slate-300">Học sinh: <b>${escapeHtml(student.fullName)}</b> (${escapeHtml(student.username)})</div>
+            </div>
+
+            <!-- Đồng hồ đếm ngược & Chỉ số vi phạm -->
+            <div class="flex flex-wrap items-center gap-3">
+              <div class="px-4 py-2 rounded-xl bg-red-600/30 border border-red-500 text-center">
+                <div class="text-[10px] uppercase font-bold text-red-200">Thời gian còn lại</div>
+                <div id="exam-countdown-display" class="text-2xl font-mono font-extrabold text-red-400">
+                  ⏱️ ${timeStr}
+                </div>
+              </div>
+
+              <div class="px-4 py-2 rounded-xl bg-amber-600/30 border border-amber-500 text-center">
+                <div class="text-[10px] uppercase font-bold text-amber-200">Vi phạm chuyển tab</div>
+                <div class="text-xl font-extrabold text-amber-300">
+                  ⚠️ ${state.examViolationsCount} / ${activeSession.maxViolations} (-${penalty}đ)
+                </div>
+              </div>
+
+              <button id="btn-finish-exam-early" class="px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm shadow-lg transition">
+                📤 Nộp Bài Thi
+              </button>
+            </div>
+          </div>
+
+          <!-- Danh sách câu hỏi kiểm tra -->
+          <div class="bg-white rounded-3xl border border-slate-200 p-6 md:p-8 space-y-6 shadow-sm">
+            <div class="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 font-semibold flex items-center gap-2">
+              <span>🔒</span>
+              <span><b>Quy chế thi:</b> Đã khóa sao chép, cấm bôi đen và cấm chuột phải. Mỗi lần chuyển tab sang màn hình khác sẽ bị trừ <b>${activeSession.deductionPerViolation} điểm</b>!</span>
+            </div>
+
+            <div class="space-y-5">
+              ${activeExam.questions.map((q, idx) => {
+                const selected = state.examAnswers[q.num || idx + 1];
                 return `
-                  <div class="p-5 rounded-2xl border border-slate-200 bg-slate-50 flex flex-col justify-between gap-4">
-                    <div>
-                      <span class="px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-800 text-xs font-bold">
-                        ${escapeHtml(ex.examCode)} • ${escapeHtml(ex.periodRange)}
+                  <div class="p-5 rounded-2xl border border-slate-200 bg-slate-50/70 space-y-3">
+                    <div class="flex justify-between items-center text-xs font-bold text-slate-500">
+                      <span class="px-2.5 py-0.5 rounded-md bg-indigo-100 text-indigo-800">
+                        Câu ${idx + 1} (${escapeHtml(q.level || "Thông hiểu")})
                       </span>
-                      <h3 class="font-extrabold text-base text-slate-900 mt-2">${escapeHtml(ex.title)}</h3>
-                      <p class="text-xs text-slate-500 mt-1">Thời gian: ${ex.durationMinutes} phút • Thang điểm: 10.0</p>
+                      <span>${q.points || 0.5} điểm</span>
                     </div>
-                    <div class="flex items-center justify-between pt-3 border-t border-slate-200">
-                      <span class="text-xs font-bold ${prev ? "text-emerald-700" : "text-slate-500"}">
-                        ${prev ? `✅ Điểm cao nhất: ${prev.score}/10` : "Chưa làm bài"}
-                      </span>
-                      <button data-start-exam="${ex.id}" class="start-exam-btn px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold">
-                        🚀 Bắt đầu Làm bài
-                      </button>
+                    <p class="font-bold text-sm text-slate-900 whitespace-pre-line leading-relaxed">
+                      ${escapeHtml(q.question)}
+                    </p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                      ${q.options.map(opt => {
+                        const isChosen = selected === opt.letter;
+                        return `
+                          <button data-ex-q="${q.num || idx + 1}" data-ex-letter="${opt.letter}"
+                            class="proctored-ex-opt text-left p-3 rounded-xl border-2 font-semibold text-sm transition flex items-start gap-2 ${
+                              isChosen
+                                ? "border-indigo-600 bg-indigo-600 text-white shadow-xs"
+                                : "border-slate-300 bg-white text-slate-800 hover:border-indigo-400"
+                            }">
+                            <span class="font-extrabold">${opt.letter}.</span>
+                            <span>${escapeHtml(opt.text)}</span>
+                          </button>
+                        `;
+                      }).join("")}
                     </div>
                   </div>
                 `;
-              })
-              .join("")}
+              }).join("")}
+            </div>
+
+            <button id="btn-submit-proctored-exam" class="w-full py-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-extrabold text-base shadow-xl transition flex items-center justify-center gap-2">
+              <span>📤 Hoàn Thành & Nộp Bài Thi Có Giám Sát</span>
+            </button>
           </div>
         </div>
       `;
     }
 
+    // Giao diện danh sách đề thi (khi học sinh chưa vào làm bài)
     return `
-      <div class="bg-white rounded-2xl border border-slate-200 p-6 space-y-6">
-        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
-          <div>
-            <h2 class="text-lg font-extrabold text-slate-900">${escapeHtml(activeExam.title)}</h2>
-            <p class="text-xs text-slate-500">Phạm vi: ${escapeHtml(activeExam.periodRange)} • 10 câu hỏi chuẩn SGK</p>
-          </div>
-          <div class="flex items-center gap-3">
-            <span class="px-3.5 py-1.5 rounded-xl bg-red-100 text-red-800 font-extrabold text-sm">
-              ⏱️ Thời gian: 45:00
-            </span>
-            <button id="btn-cancel-exam" class="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold">Quay lại</button>
-          </div>
-        </div>
-
-        <div class="space-y-4">
-          ${activeExam.questions
-            .map(
-              q => `
-            <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2.5">
-              <div class="flex justify-between text-xs font-bold text-slate-500">
-                <span>Câu ${q.num} (${escapeHtml(q.level)}) — ${escapeHtml(q.lessonRef)}</span>
-                <span>${q.points} điểm</span>
+      <div class="space-y-6">
+        <!-- Thông báo Trạng thái Ca thi từ Giáo viên -->
+        ${
+          isExamAssignedToMe
+            ? `
+          <div class="bg-gradient-to-r from-indigo-700 via-blue-700 to-indigo-800 rounded-3xl p-6 text-white shadow-xl flex flex-wrap items-center justify-between gap-4 border border-indigo-500 animate-pulse">
+            <div>
+              <div class="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-amber-300 mb-1">
+                <span class="inline-block w-3 h-3 rounded-full bg-emerald-400 animate-ping"></span>
+                <span>GIÁO VIÊN ĐÃ MỞ CA THI CHO LỚP ${escapeHtml(student.className)}</span>
               </div>
-              <p class="font-bold text-sm text-slate-900 whitespace-pre-line">${escapeHtml(q.question)}</p>
-              <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-                ${q.options
-                  .map(
-                    opt => `
-                  <button data-ex-q="${q.num}" data-ex-letter="${opt.letter}"
-                    class="ex-opt-btn text-left p-2.5 rounded-xl border-2 text-sm font-semibold ${
-                      state.examAnswers[q.num] === opt.letter
-                        ? "border-indigo-600 bg-indigo-600 text-white"
-                        : "border-slate-300 bg-white text-slate-800"
-                    }">
-                    <b>${opt.letter}.</b> ${escapeHtml(opt.text)}
-                  </button>
-                `
-                  )
-                  .join("")}
-              </div>
+              <h2 class="text-2xl font-extrabold">${escapeHtml(activeExam.title)}</h2>
+              <p class="text-xs text-blue-100 mt-1">
+                Thời gian: <b>${activeSession.durationMinutes} phút</b> • Chế độ: <b>Kiểm soát chống sao chép, cấm chuyển tab (Trừ ${activeSession.deductionPerViolation}đ/lần)</b>
+              </p>
             </div>
-          `
-            )
-            .join("")}
-        </div>
+            <button id="btn-enter-active-exam" class="px-6 py-3.5 rounded-2xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-extrabold text-sm shadow-xl transition transform hover:scale-105">
+              🚀 VÀO LÀM BÀI THI NGAY
+            </button>
+          </div>
+        `
+            : `
+          <div class="bg-amber-50 border-2 border-amber-300 rounded-2xl p-5 text-center space-y-2">
+            <div class="text-3xl">🔒</div>
+            <h3 class="font-extrabold text-amber-950 text-base">
+              CHƯA CÓ CA THI NÀO ĐƯỢC MỞ CHO LỚP ${escapeHtml(student.className)}
+            </h3>
+            <p class="text-xs text-amber-900 max-w-xl mx-auto">
+              Theo quy chế khảo thí của Trường THCS Mão Điền, đề kiểm tra định kỳ chỉ mở khi Giáo viên phát lệnh <b>"Giao đề"</b> trong tiết kiểm tra. Khi Thầy bắt đầu ca thi, nút <b>Vào làm bài thi</b> sẽ tự động kích hoạt trên màn hình của em!
+            </p>
+          </div>
+        `
+        }
 
-        <button id="btn-submit-exam" class="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-lg">
-          📤 Nộp Bài Kiểm Tra Định Kỳ & Chấm Điểm
-        </button>
+        <!-- Danh sách Đề thi Định kỳ chuẩn Ma trận Đặc tả của Khối -->
+        <div class="bg-white rounded-3xl border border-slate-200 p-6 md:p-8 space-y-5">
+          <div>
+            <span class="text-xs font-bold text-indigo-600 uppercase">Ngân hàng Đề thi Khảo thí Bộ GD&ĐT</span>
+            <h2 class="text-xl font-extrabold text-slate-900 mt-0.5">
+              📝 Bài Kiểm tra Định kỳ — Khối ${student.grade} (20 câu trắc nghiệm / 45 phút)
+            </h2>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            ${examsOfGrade.map(ex => {
+              const myScores = student.examScores || {};
+              const record = myScores[ex.id];
+              return `
+                <div class="p-5 rounded-2xl border border-slate-200 bg-slate-50 flex flex-col justify-between gap-4">
+                  <div>
+                    <div class="flex justify-between items-center">
+                      <span class="px-2.5 py-0.5 rounded-md bg-indigo-100 text-indigo-800 text-xs font-bold">
+                        ${escapeHtml(ex.examCode)} • ${escapeHtml(ex.periodRange)}
+                      </span>
+                      <span class="text-xs text-slate-500 font-semibold">45 phút • 20 câu</span>
+                    </div>
+                    <h3 class="font-extrabold text-base text-slate-900 mt-2">${escapeHtml(ex.title)}</h3>
+                    <p class="text-xs text-slate-500 mt-1">Đề kiểm tra chuẩn ma trận kiến thức Tin học ${student.grade} KNTT</p>
+                  </div>
+
+                  <div class="flex items-center justify-between pt-3 border-t border-slate-200">
+                    <div>
+                      ${
+                        record
+                          ? `<span class="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-extrabold">
+                              ✅ Điểm: ${record.score}/10 ${record.violations ? `(Vi phạm: ${record.violations} lần)` : ""}
+                            </span>`
+                          : `<span class="text-xs text-slate-400 font-bold">Chưa có điểm</span>`
+                      }
+                    </div>
+
+                    <div>
+                      ${
+                        isExamAssignedToMe && activeSession.examId === ex.id
+                          ? `<button class="start-active-exam-btn px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold text-xs shadow-md">
+                              🚀 Vào Thi Ngay
+                            </button>`
+                          : `<button disabled class="px-4 py-2 rounded-xl bg-slate-200 text-slate-400 font-bold text-xs cursor-not-allowed">
+                              🔒 Đề chưa mở
+                            </button>`
+                      }
+                    </div>
+                  </div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        </div>
       </div>
     `;
   }
@@ -1127,7 +1469,216 @@
     `;
   }
 
+
+  let antiCheatVisibilityHandler = null;
+  let antiCheatBlurHandler = null;
+  let antiCheatContextMenuHandler = null;
+  let antiCheatCopyHandler = null;
+  let antiCheatKeydownHandler = null;
+
+  function attachAntiCheatListeners(activeSession) {
+    detachAntiCheatListeners();
+
+    antiCheatVisibilityHandler = () => {
+      if (document.hidden && state.activeExamId) {
+        handleExamViolation(activeSession, "Chuyển tab hoặc ẩn cửa sổ trình duyệt");
+      }
+    };
+
+    antiCheatBlurHandler = () => {
+      if (state.activeExamId) {
+        handleExamViolation(activeSession, "Rời con trỏ khỏi cửa sổ bài thi (Alt+Tab hoặc mở ứng dụng khác)");
+      }
+    };
+
+    antiCheatContextMenuHandler = (e) => {
+      e.preventDefault();
+      showToast("🔒 Đã khóa chức năng chuột phải trong giờ thi!", "error");
+    };
+
+    antiCheatCopyHandler = (e) => {
+      e.preventDefault();
+      showToast("🔒 Quy chế thi cấm sao chép nội dung câu hỏi!", "error");
+    };
+
+    antiCheatKeydownHandler = (e) => {
+      if (
+        e.key === "F12" ||
+        (e.ctrlKey && (e.key === "c" || e.key === "C" || e.key === "v" || e.key === "V" || e.key === "u" || e.key === "U" || e.key === "p" || e.key === "P")) ||
+        (e.ctrlKey && e.shiftKey && (e.key === "I" || e.key === "i" || e.key === "J" || e.key === "j"))
+      ) {
+        e.preventDefault();
+        showToast("🔒 Phím tắt này bị vô hiệu hóa trong giờ thi!", "error");
+      }
+    };
+
+    document.addEventListener("visibilitychange", antiCheatVisibilityHandler);
+    window.addEventListener("blur", antiCheatBlurHandler);
+    document.addEventListener("contextmenu", antiCheatContextMenuHandler);
+    document.addEventListener("copy", antiCheatCopyHandler);
+    document.addEventListener("paste", antiCheatCopyHandler);
+    document.addEventListener("keydown", antiCheatKeydownHandler);
+  }
+
+  function detachAntiCheatListeners() {
+    if (antiCheatVisibilityHandler) document.removeEventListener("visibilitychange", antiCheatVisibilityHandler);
+    if (antiCheatBlurHandler) window.removeEventListener("blur", antiCheatBlurHandler);
+    if (antiCheatContextMenuHandler) document.removeEventListener("contextmenu", antiCheatContextMenuHandler);
+    if (antiCheatCopyHandler) document.removeEventListener("copy", antiCheatCopyHandler);
+    if (antiCheatCopyHandler) document.removeEventListener("paste", antiCheatCopyHandler);
+    if (antiCheatKeydownHandler) document.removeEventListener("keydown", antiCheatKeydownHandler);
+  }
+
+  function handleExamViolation(activeSession, reason) {
+    state.examViolationsCount++;
+    state.showViolationModal = true;
+
+    Store.recordExamViolation({
+      studentId: state.currentUser.id,
+      studentName: state.currentUser.fullName,
+      username: state.currentUser.username,
+      className: state.currentUser.className,
+      examId: state.activeExamId,
+      violationNumber: state.examViolationsCount,
+      reason: reason
+    });
+
+    renderApp();
+
+    if (state.examViolationsCount >= Number(activeSession.maxViolations || 3)) {
+      alert(`❌ Em đã vi phạm quy chế chuyển tab quá ${activeSession.maxViolations} lần cho phép! Hệ thống tự động thu bài thi ngay lập tức.`);
+      submitCurrentProctoredExam(true);
+    }
+  }
+
   function bindStudentEvents() {
+    // Xử lý vào làm bài thi có kiểm soát
+    const btnEnterExam = document.getElementById("btn-enter-active-exam") || document.querySelector(".start-active-exam-btn");
+    if (btnEnterExam) {
+      btnEnterExam.onclick = () => {
+        const activeSession = Store.getActiveExamSession();
+        if (!activeSession || activeSession.status !== "active") {
+          showToast("Ca thi chưa được Giáo viên kích hoạt!", "error");
+          return;
+        }
+
+        state.activeExamId = activeSession.examId;
+        state.examAnswers = {};
+        state.examViolationsCount = 0;
+        state.examTimeLeftSec = activeSession.durationMinutes * 60;
+        state.showViolationModal = false;
+
+        // Bắt đầu đếm ngược từng giây
+        if (state.examTimerInterval) clearInterval(state.examTimerInterval);
+        state.examTimerInterval = setInterval(() => {
+          if (state.examTimeLeftSec > 0) {
+            state.examTimeLeftSec--;
+            const disp = document.getElementById("exam-countdown-display");
+            if (disp) {
+              const m = Math.floor(state.examTimeLeftSec / 60);
+              const s = state.examTimeLeftSec % 60;
+              disp.innerText = `⏱️ ${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+            }
+          } else {
+            clearInterval(state.examTimerInterval);
+            state.examTimerInterval = null;
+            showToast("ĐÃ HẾT GIỜ LÀM BÀI! Hệ thống tự động thu bài thi...", "error");
+            submitCurrentProctoredExam(true);
+          }
+        }, 1000);
+
+        // Kích hoạt Anti-Cheat Listeners
+        attachAntiCheatListeners(activeSession);
+        renderApp();
+      };
+    }
+
+    // Xử lý chọn đáp án bài thi có kiểm soát
+    document.querySelectorAll(".proctored-ex-opt").forEach(btn => {
+      btn.onclick = () => {
+        const qnum = btn.getAttribute("data-ex-q");
+        const letter = btn.getAttribute("data-ex-letter");
+        state.examAnswers[qnum] = letter;
+        renderApp();
+      };
+    });
+
+    const btnDismissViolation = document.getElementById("btn-dismiss-violation");
+    if (btnDismissViolation) {
+      btnDismissViolation.onclick = () => {
+        state.showViolationModal = false;
+        renderApp();
+      };
+    }
+
+    function submitCurrentProctoredExam(isAuto = false) {
+      if (state.examTimerInterval) {
+        clearInterval(state.examTimerInterval);
+        state.examTimerInterval = null;
+      }
+      detachAntiCheatListeners();
+
+      const activeSession = Store.getActiveExamSession();
+      const allExams = Curriculum.periodicExams || [];
+      const ex = allExams.find(e => e.id === state.activeExamId) || allExams[0];
+
+      let correct = 0;
+      ex.questions.forEach((q, idx) => {
+        const ans = state.examAnswers[q.num || idx + 1];
+        if (ans && ans === q.correctLetter) correct++;
+      });
+
+      const totalQ = ex.questions.length || 20;
+      const rawScore = Number(((correct / totalQ) * 10).toFixed(1));
+      const penaltyDeduction = Number(activeSession?.deductionPerViolation || 0.5);
+      const penaltyPoints = Number((state.examViolationsCount * penaltyDeduction).toFixed(1));
+      const finalScore = Number(Math.max(0, rawScore - penaltyPoints).toFixed(1));
+
+      // Lưu kết quả vào cơ sở dữ liệu học sinh
+      const db = Store.loadStudentsDB();
+      const st = db.students.find(s => s.id === state.currentUser.id);
+      if (st) {
+        if (!st.examScores) st.examScores = {};
+        st.examScores[ex.id] = {
+          score: finalScore,
+          rawScore: rawScore,
+          violations: state.examViolationsCount,
+          penalty: penaltyPoints,
+          completedAt: new Date().toLocaleDateString("vi-VN")
+        };
+        st.xp = (Number(st.xp) || 0) + Math.round(finalScore * 25);
+        st.level = Math.floor(st.xp / 500) + 1;
+        Store.saveStudentsDB(db);
+      }
+
+      // Lưu bài nộp vào danh sách cho Giáo viên giám sát
+      Store.saveExamSubmission({
+        studentId: state.currentUser.id,
+        studentName: state.currentUser.fullName,
+        username: state.currentUser.username,
+        className: state.currentUser.className,
+        examId: ex.id,
+        examTitle: ex.title,
+        violations: state.examViolationsCount,
+        penaltyPoints: penaltyPoints,
+        rawScore: rawScore,
+        finalScore: finalScore,
+        autoSubmitted: isAuto
+      });
+
+      state.activeExamId = null;
+      showToast(`Đã thu bài thi "${ex.title}": Điểm gốc ${rawScore}đ - Trừ ${penaltyPoints}đ vi phạm = Thực nhận ${finalScore}/10 đ!`);
+    }
+
+    const btnSubmitProctored = document.getElementById("btn-submit-proctored-exam") || document.getElementById("btn-finish-exam-early");
+    if (btnSubmitProctored) {
+      btnSubmitProctored.onclick = () => {
+        if (confirm("Em có chắc chắn muốn nộp bài thi ngay bây giờ không?")) {
+          submitCurrentProctoredExam(false);
+        }
+      };
+    }
+
     const btnLogout = document.getElementById("btn-logout");
     if (btnLogout) {
       btnLogout.onclick = () => {
@@ -1167,7 +1718,25 @@
       };
     }
 
-    // Nộp Phiếu học tập điện tử Nhóm (Hoạt động 1)
+        // Xử lý nút bấm chọn Hộp A / Hộp B của Dạng 1
+    document.querySelectorAll(".dd-toggle-btn").forEach(btn => {
+      btn.onclick = () => {
+        const id = btn.getAttribute("data-dd-id");
+        const box = btn.getAttribute("data-dd-box");
+        state.wsDragDropAssignments[id] = box;
+        renderApp();
+      };
+    });
+
+    // Xử lý chọn cột B của Dạng 3
+    document.querySelectorAll(".ws-mp-select").forEach(sel => {
+      sel.onchange = (e) => {
+        const id = sel.getAttribute("data-ws-mp");
+        state.wsMatchingAssignments[id] = e.target.value;
+      };
+    });
+
+    // Nộp Phiếu học tập điện tử Nhóm (Hoạt động 1 - Chấm trọn vẹn cả 4 Dạng)
     const btnSubmitWs = document.getElementById("btn-submit-worksheet");
     if (btnSubmitWs) {
       btnSubmitWs.onclick = () => {
@@ -1175,24 +1744,41 @@
         const lesson = getLesson(live.grade || state.currentUser.grade, live.period || 1);
         const ws = lesson.activity1_discovery.worksheet;
 
-        let correctCount = 0;
-        ws.fillBlanks.forEach(fb => {
+        // Chấm Dạng 1: Phân loại kéo thả (Hộp A / B)
+        let d1Correct = 0;
+        const ddItems = ws.dragDrop?.items || [];
+        ddItems.forEach(item => {
+          if (state.wsDragDropAssignments[item.id] === item.correctBox) d1Correct++;
+        });
+
+        // Chấm Dạng 2: Điền khuyết
+        let d2Correct = 0;
+        (ws.fillBlanks || []).forEach(fb => {
           const sel = document.querySelector(`[data-ws-fb="${fb.id}"]`);
           const val = (sel?.value || "").trim().toLowerCase();
-          if (val && val === fb.correctAnswer.toLowerCase()) {
-            correctCount++;
-          }
+          if (val && val === fb.correctAnswer.toLowerCase()) d2Correct++;
         });
 
-        let answeredDiscussion = 0;
-        ws.groupQuestions.forEach(gq => {
+        // Chấm Dạng 3: Nối cột A - B
+        let d3Correct = 0;
+        const mpList = ws.matchingPairs || [];
+        mpList.forEach(mp => {
+          const sel = document.querySelector(`[data-ws-mp="${mp.id}"]`);
+          const val = (sel?.value || state.wsMatchingAssignments[mp.id] || "").trim();
+          if (val && val === mp.right.trim()) d3Correct++;
+        });
+
+        // Chấm Dạng 4: Thảo luận tình huống thực tế
+        let d4Answered = 0;
+        (ws.groupQuestions || []).forEach(gq => {
           const ta = document.querySelector(`[data-ws-gq="${gq.id}"]`);
-          if (ta && ta.value.trim().length >= 5) answeredDiscussion++;
+          if (ta && ta.value.trim().length >= 5) d4Answered++;
         });
 
-        const totalItems = Math.max(1, ws.fillBlanks.length + ws.groupQuestions.length);
-        const rawScore = ((correctCount + answeredDiscussion) / totalItems) * 10;
-        const finalScore = Number(Math.max(4, rawScore).toFixed(1));
+        const totalItems = Math.max(1, ddItems.length + (ws.fillBlanks || []).length + mpList.length + (ws.groupQuestions || []).length);
+        const totalEarned = d1Correct + d2Correct + d3Correct + d4Answered;
+        const rawScore = (totalEarned / totalItems) * 10;
+        const finalScore = Number(Math.min(10, Math.max(4.5, rawScore)).toFixed(1));
         const xpEarned = 100;
 
         Store.creditGroupScoreAndXP(state.partnerIds, lesson.id, "act1", finalScore, xpEarned);
@@ -1206,10 +1792,16 @@
           memberIds: state.partnerIds,
           memberNames: state.currentUser.memberNames || [state.currentUser.fullName],
           score: finalScore,
+          detail: {
+            d1: `${d1Correct}/${ddItems.length}`,
+            d2: `${d2Correct}/${(ws.fillBlanks || []).length}`,
+            d3: `${d3Correct}/${mpList.length}`,
+            d4: `${d4Answered}/${(ws.groupQuestions || []).length}`
+          },
           submittedAt: new Date().toLocaleTimeString("vi-VN")
         });
         Store.saveWorksheetSubs(subs);
-        showToast(`Đã nộp Phiếu học tập Nhóm! Điểm nhóm: ${finalScore}/10 (+${xpEarned} XP cho cả nhóm)`);
+        showToast(`Đã nộp Phiếu học tập 4 Dạng! Điểm nhóm: ${finalScore}/10 (+${xpEarned} XP cho cả nhóm)`);
       };
     }
 
@@ -1456,6 +2048,11 @@
               }">
                 📡 Điều khiển Phòng Live & Chấm Drive
               </button>
+              <button data-ad-tab="exams" class="px-3.5 py-2 rounded-lg text-xs font-bold transition ${
+                state.adminTab === "exams" ? "bg-indigo-600 text-white shadow" : "text-slate-300 hover:text-white"
+              }">
+                📝 Giao Đề & Giám Sát Thi Định Kỳ
+              </button>
               <button data-ad-tab="students" class="px-3.5 py-2 rounded-lg text-xs font-bold transition ${
                 state.adminTab === "students" ? "bg-indigo-600 text-white shadow" : "text-slate-300 hover:text-white"
               }">
@@ -1481,6 +2078,7 @@
 
         <main class="max-w-7xl w-full mx-auto flex-1 p-4 md:p-6">
           ${state.adminTab === "live" ? renderAdminLiveController(live) : ""}
+          ${state.adminTab === "exams" ? renderAdminExamManager() : ""}
           ${state.adminTab === "students" ? renderAdminStudentManager() : ""}
           ${state.adminTab === "reports" ? renderAdminReports() : ""}
           ${state.adminTab === "config" ? renderAdminDriveConfig() : ""}
@@ -2045,6 +2643,71 @@
         renderApp();
       };
     });
+
+    // Giao đề thi Định kỳ có Kiểm soát (Admin Exam Manager)
+    const gradeExamSel = document.getElementById("exam-cfg-grade");
+    if (gradeExamSel) {
+      gradeExamSel.onchange = (e) => {
+        state.adminExamSelectedGrade = Number(e.target.value);
+        renderApp();
+      };
+    }
+
+    const btnLaunchExam = document.getElementById("btn-launch-exam-session");
+    if (btnLaunchExam) {
+      btnLaunchExam.onclick = () => {
+        const grade = Number(document.getElementById("exam-cfg-grade")?.value || 7);
+        const examId = document.getElementById("exam-cfg-id")?.value;
+        const targetClass = document.getElementById("exam-cfg-class")?.value || "ALL";
+        const durationMinutes = Number(document.getElementById("exam-cfg-duration")?.value || 45);
+        const deductionPerViolation = Number(document.getElementById("exam-cfg-deduction")?.value || 0.5);
+        const maxViolations = Number(document.getElementById("exam-cfg-max-vios")?.value || 3);
+
+        const allExams = Curriculum.periodicExams || [];
+        const ex = allExams.find(e => e.id === examId) || allExams[0];
+
+        const session = {
+          sessionId: "EXS_" + Date.now(),
+          examId: ex.id,
+          examTitle: ex.title,
+          grade: grade,
+          targetClass: targetClass,
+          durationMinutes: durationMinutes,
+          deductionPerViolation: deductionPerViolation,
+          maxViolations: maxViolations,
+          status: "active",
+          startedAt: Date.now()
+        };
+
+        Store.saveActiveExamSession(session);
+        showToast(`Đã GIAO ĐỀ "${ex.title}" cho Lớp ${targetClass} (Thời gian: ${durationMinutes} phút)!`);
+      };
+    }
+
+    const btnCloseExam = document.getElementById("btn-close-exam-session");
+    if (btnCloseExam) {
+      btnCloseExam.onclick = () => {
+        Store.closeExamSession();
+        showToast("Đã đóng ca thi định kỳ!");
+      };
+    }
+
+    const btnExportExamRes = document.getElementById("btn-export-exam-results");
+    if (btnExportExamRes) {
+      btnExportExamRes.onclick = () => {
+        const subs = Store.getExamSubmissions();
+        const rows = [["STT", "Lớp", "Họ và tên", "Tài khoản", "Bài thi", "Số lần vi phạm chuyển tab", "Điểm trừ", "Điểm gốc", "Điểm thực nhận", "Thời gian nộp"]];
+        subs.forEach((s, idx) => {
+          rows.push([idx + 1, s.className, s.studentName, s.username, s.examTitle, s.violations, s.penaltyPoints, s.rawScore, s.finalScore, s.submittedAt]);
+        });
+        const csvContent = "\uFEFF" + rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "Ket_Qua_Kiem_Tra_Dinh_Ky_THCS_Mao_Dien.csv";
+        a.click();
+      };
+    }
 
     // Điều khiển Phòng Live
     const btnLock = document.getElementById("btn-toggle-screen-lock");

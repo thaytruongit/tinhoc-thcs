@@ -14,7 +14,10 @@
     MINIGAME_SUBS: "THCS_MD_MINIGAME_SUBS_V2",
     DRIVE_SUBS: "THCS_MD_DRIVE_SUBS_V2",
     GAS_CONFIG: "THCS_MD_GAS_CONFIG_V2",
-    SESSION_USER: "THCS_MD_SESSION_USER_V2"
+    SESSION_USER: "THCS_MD_SESSION_USER_V2",
+    ACTIVE_EXAM_SESSION: "THCS_MD_ACTIVE_EXAM_SESSION_V2",
+    EXAM_SUBS: "THCS_MD_EXAM_SUBS_V2",
+    EXAM_VIOLATIONS: "THCS_MD_EXAM_VIOLATIONS_V2"
   };
 
   // Kênh cục bộ trong cùng 1 trình duyệt
@@ -22,14 +25,16 @@
     ? new BroadcastChannel("THCS_MAO_DIEN_LOCAL_SYNC")
     : null;
 
-  // Cấu hình Kênh Đám mây MQTT WSS (Miễn phí, chuẩn bảo mật WSS chạy trên mọi mạng LAN trường học)
+  // Cấu hình Kênh Đám mây MQTT WSS (Hỗ trợ đa máy chủ dự phòng)
   const MQTT_BROKERS = [
     "wss://broker.emqx.io:8084/mqtt",
     "wss://broker.hivemq.com:8884/mqtt"
   ];
+  let currentBrokerIndex = 0;
   const MQTT_TOPIC_PREFIX = "thcs-maodien/tinhoc-thcs/";
   const LIVE_ROOM_TOPIC = MQTT_TOPIC_PREFIX + "live-room-main";
   const LIVE_EVENT_TOPIC = MQTT_TOPIC_PREFIX + "live-events";
+  const EXAM_SESSION_TOPIC = MQTT_TOPIC_PREFIX + "exam-session";
 
   let mqttClient = null;
   let isMqttConnected = false;
@@ -41,7 +46,7 @@
     }
 
     const clientId = "client_" + Math.random().toString(16).substring(2, 10);
-    const brokerUrl = MQTT_BROKERS[0];
+    const brokerUrl = MQTT_BROKERS[currentBrokerIndex];
 
     try {
       mqttClient = mqtt.connect(brokerUrl, {
@@ -55,13 +60,15 @@
       mqttClient.on("connect", () => {
         isMqttConnected = true;
         console.log("⚡ Realtime Cloud WSS Connected:", brokerUrl);
-        // Lắng nghe lệnh từ Giáo viên và sự kiện từ toàn bộ máy Học sinh
-        mqttClient.subscribe([LIVE_ROOM_TOPIC, LIVE_EVENT_TOPIC], { qos: 1 });
+        window.dispatchEvent(new CustomEvent("MQTT_STATUS_CHANGED", { detail: { connected: true, broker: brokerUrl } }));
+
+        // Lắng nghe kênh phòng chung, kênh sự kiện và kênh kỳ thi
+        mqttClient.subscribe([LIVE_ROOM_TOPIC, LIVE_EVENT_TOPIC, EXAM_SESSION_TOPIC, MQTT_TOPIC_PREFIX + "class/+"], { qos: 1 });
 
         // Học sinh vừa mở trang sẽ phát tín hiệu xin đồng bộ trạng thái mới nhất từ máy Giáo viên
         const user = getSessionUser();
         if (user && user.role === "student") {
-          publishMqtt(LIVE_EVENT_TOPIC, { type: "REQUEST_CURRENT_STATE", from: user.username });
+          publishMqtt(LIVE_EVENT_TOPIC, { type: "REQUEST_CURRENT_STATE", from: user.username, className: user.className });
         }
       });
 
@@ -75,11 +82,12 @@
       });
 
       mqttClient.on("error", (err) => {
-        console.warn("MQTT Connection Warning:", err);
+        console.warn("MQTT Connection Warning on", brokerUrl, err);
       });
 
       mqttClient.on("close", () => {
         isMqttConnected = false;
+        window.dispatchEvent(new CustomEvent("MQTT_STATUS_CHANGED", { detail: { connected: false } }));
       });
     } catch (e) {
       console.warn("MQTT Init Exception:", e);
@@ -97,10 +105,16 @@
   function handleIncomingRealtimeMessage(topic, data) {
     if (!data || !data.type) return;
 
-    if (topic === LIVE_ROOM_TOPIC || data.type === "LIVE_STATE_CHANGED") {
+    if (topic === LIVE_ROOM_TOPIC || topic.startsWith(MQTT_TOPIC_PREFIX + "class/") || data.type === "LIVE_STATE_CHANGED") {
       // Nhận trạng thái mới nhất từ Giáo viên phát xuống
       if (data.payload) {
         localStorage.setItem(STORAGE_KEYS.LIVE_STATE, JSON.stringify(data.payload));
+        window.dispatchEvent(new CustomEvent("APP_REALTIME_SYNC", { detail: data.payload }));
+      }
+    } else if (topic === EXAM_SESSION_TOPIC || data.type === "EXAM_SESSION_CHANGED") {
+      if (data.payload) {
+        localStorage.setItem(STORAGE_KEYS.ACTIVE_EXAM_SESSION, JSON.stringify(data.payload));
+        window.dispatchEvent(new CustomEvent("EXAM_SESSION_SYNC", { detail: data.payload }));
         window.dispatchEvent(new CustomEvent("APP_REALTIME_SYNC", { detail: data.payload }));
       }
     } else if (topic === LIVE_EVENT_TOPIC) {
@@ -110,6 +124,13 @@
         if (user && user.role === "admin") {
           const current = loadLiveState();
           publishMqtt(LIVE_ROOM_TOPIC, { type: "LIVE_STATE_CHANGED", payload: current }, true);
+          if (current.className) {
+            publishMqtt(MQTT_TOPIC_PREFIX + "class/" + current.className, { type: "LIVE_STATE_CHANGED", payload: current }, true);
+          }
+          const examSession = getActiveExamSession();
+          if (examSession) {
+            publishMqtt(EXAM_SESSION_TOPIC, { type: "EXAM_SESSION_CHANGED", payload: examSession }, true);
+          }
         }
       } else if (data.type === "STUDENT_SUBMISSION") {
         // Nhận bài nộp của học sinh (Phiếu nhóm / Minigame / Drive) cập nhật vào danh sách của GV
@@ -134,6 +155,20 @@
           }
         }
         window.dispatchEvent(new CustomEvent("APP_REALTIME_SYNC", { detail: sub }));
+      } else if (data.type === "EXAM_SUBMISSION") {
+        const sub = data.payload;
+        const subs = loadJSON(STORAGE_KEYS.EXAM_SUBS, []);
+        const idx = subs.findIndex(x => x.studentId === sub.studentId && x.examId === sub.examId);
+        if (idx >= 0) subs[idx] = sub;
+        else subs.unshift(sub);
+        localStorage.setItem(STORAGE_KEYS.EXAM_SUBS, JSON.stringify(subs));
+        window.dispatchEvent(new CustomEvent("APP_REALTIME_SYNC", { detail: sub }));
+      } else if (data.type === "STUDENT_EXAM_VIOLATION") {
+        const violation = data.payload;
+        const vios = loadJSON(STORAGE_KEYS.EXAM_VIOLATIONS, []);
+        vios.unshift(violation);
+        localStorage.setItem(STORAGE_KEYS.EXAM_VIOLATIONS, JSON.stringify(vios));
+        window.dispatchEvent(new CustomEvent("APP_REALTIME_SYNC", { detail: violation }));
       } else if (data.type === "GROUP_REGISTERED") {
         const groups = loadJSON(STORAGE_KEYS.GROUPS_LIST, []);
         if (!groups.some(g => g.groupId === data.payload.groupId)) {
@@ -243,9 +278,68 @@
 
     // 1. Phát qua kênh MQTT Đám mây (Đến tất cả trình duyệt khác: Chrome, Edge, 45 PC)
     publishMqtt(LIVE_ROOM_TOPIC, { type: "LIVE_STATE_CHANGED", payload: newState }, true);
+    if (newState.className) {
+      publishMqtt(MQTT_TOPIC_PREFIX + "class/" + newState.className, { type: "LIVE_STATE_CHANGED", payload: newState }, true);
+    }
 
     // 2. Phát qua kênh Cục bộ cùng máy
     broadcastLocal("LIVE_STATE_CHANGED", newState);
+  }
+
+  // Quản lý Ca Kiểm tra Định kỳ có Kiểm soát (Proctored Exam Session)
+  function getActiveExamSession() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.ACTIVE_EXAM_SESSION);
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s && s.status === "active") return s;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function saveActiveExamSession(session) {
+    session.updatedAt = Date.now();
+    localStorage.setItem(STORAGE_KEYS.ACTIVE_EXAM_SESSION, JSON.stringify(session));
+    publishMqtt(EXAM_SESSION_TOPIC, { type: "EXAM_SESSION_CHANGED", payload: session }, true);
+    broadcastLocal("EXAM_SESSION_CHANGED", session);
+  }
+
+  function closeExamSession() {
+    const s = getActiveExamSession() || { status: "closed" };
+    s.status = "closed";
+    s.closedAt = Date.now();
+    localStorage.setItem(STORAGE_KEYS.ACTIVE_EXAM_SESSION, JSON.stringify(s));
+    publishMqtt(EXAM_SESSION_TOPIC, { type: "EXAM_SESSION_CHANGED", payload: s }, true);
+    broadcastLocal("EXAM_SESSION_CHANGED", s);
+  }
+
+  function recordExamViolation(violation) {
+    violation.timestamp = new Date().toLocaleTimeString("vi-VN");
+    const list = loadJSON(STORAGE_KEYS.EXAM_VIOLATIONS, []);
+    list.unshift(violation);
+    localStorage.setItem(STORAGE_KEYS.EXAM_VIOLATIONS, JSON.stringify(list));
+    publishMqtt(LIVE_EVENT_TOPIC, { type: "STUDENT_EXAM_VIOLATION", payload: violation });
+    broadcastLocal("STUDENT_EXAM_VIOLATION", violation);
+  }
+
+  function getExamViolations() {
+    return loadJSON(STORAGE_KEYS.EXAM_VIOLATIONS, []);
+  }
+
+  function saveExamSubmission(sub) {
+    sub.submittedAt = new Date().toLocaleTimeString("vi-VN");
+    const list = loadJSON(STORAGE_KEYS.EXAM_SUBS, []);
+    const idx = list.findIndex(x => x.studentId === sub.studentId && x.examId === sub.examId);
+    if (idx >= 0) list[idx] = sub;
+    else list.unshift(sub);
+    localStorage.setItem(STORAGE_KEYS.EXAM_SUBS, JSON.stringify(list));
+    publishMqtt(LIVE_EVENT_TOPIC, { type: "EXAM_SUBMISSION", payload: sub });
+    broadcastLocal("EXAM_SUBMISSION", sub);
+  }
+
+  function getExamSubmissions() {
+    return loadJSON(STORAGE_KEYS.EXAM_SUBS, []);
   }
 
   function loadJSON(key, defaultVal) {
@@ -379,12 +473,22 @@
     STORAGE_KEYS,
     localBroadcast,
     publishMqtt,
+    isMqttConnected: () => isMqttConnected,
     LIVE_EVENT_TOPIC,
+    EXAM_SESSION_TOPIC,
     generateStudentUsername,
     loadStudentsDB,
     saveStudentsDB,
     loadLiveState,
     saveLiveState,
+    // Kiểm tra định kỳ có kiểm soát
+    getActiveExamSession,
+    saveActiveExamSession,
+    closeExamSession,
+    recordExamViolation,
+    getExamViolations,
+    saveExamSubmission,
+    getExamSubmissions,
     getGroups: () => loadJSON(STORAGE_KEYS.GROUPS_LIST, []),
     saveGroups: (list) => {
       saveJSON(STORAGE_KEYS.GROUPS_LIST, list, "GROUPS_UPDATED");

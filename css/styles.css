@@ -52,18 +52,60 @@ body {
   100% { transform: scale(0.96); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
 }
 
-/* Notebook Slide Box (Slide kiến thức ghi vở chuẩn SGK) */
-.notebook-paper {
-  background: #fffbeb;
-  background-image: linear-gradient(#fde68a 1px, transparent 1px);
-  background-size: 100% 2.1rem;
-  border: 2px solid #f59e0b;
-  border-left: 8px solid #d97706;
-  border-radius: 14px;
-  padding: 1.5rem 1.75rem;
-  box-shadow: 0 10px 25px -5px rgba(217, 119, 6, 0.15);
+/* HỘP GHI NHỚ SÁCH GIÁO KHOA KẾT NỐI TRI THỨC (CHUẨN HỘP CAM NGUYÊN VĂN SGK) */
+.sgk-ghi-nho-container {
+  position: relative;
+  padding-top: 18px;
 }
 
+.sgk-ghi-nho-box {
+  position: relative;
+  background: linear-gradient(135deg, #e5875a 0%, #db7848 100%);
+  border: 2.5px solid #d46532;
+  border-radius: 22px;
+  padding: 2rem 2.25rem 1.75rem 2.5rem;
+  color: #ffffff;
+  box-shadow: 0 14px 30px -6px rgba(219, 120, 72, 0.4);
+}
+
+.sgk-mascot-badge {
+  position: absolute;
+  top: -20px;
+  left: 24px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #facc15;
+  border: 3.5px solid #dc2626;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+  z-index: 10;
+}
+
+.sgk-ghi-nho-bullet {
+  position: relative;
+  padding-left: 1.6rem;
+  margin-bottom: 0.95rem;
+  font-size: 1.05rem;
+  line-height: 1.65;
+  font-weight: 500;
+  color: #ffffff;
+  letter-spacing: -0.01em;
+}
+
+.sgk-ghi-nho-bullet::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  font-size: 1.5rem;
+  line-height: 1.2;
+  color: #ffffff;
+}
+
+/* Thẻ từ khóa kéo thả / chọn */
 .word-chip {
   display: inline-flex;
   align-items: center;
@@ -83,6 +125,32 @@ body {
   transform: translateY(-1px);
 }
 
+/* Thẻ tương tác kéo thả / phân loại */
+.bucket-card {
+  min-height: 140px;
+  border-radius: 16px;
+  border: 2px dashed #94a3b8;
+  background: #f8fafc;
+  padding: 1rem;
+  transition: all 0.2s ease;
+}
+
+.bucket-card.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.draggable-item {
+  cursor: grab;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+
+.draggable-item:active {
+  cursor: grabbing;
+}
+
+/* Custom Scrollbar */
 .custom-scrollbar::-webkit-scrollbar {
   width: 7px;
   height: 7px;
@@ -95,4 +163,37 @@ body {
 .custom-scrollbar::-webkit-scrollbar-thumb {
   background: #cbd5e1;
   border-radius: 999px;
+}
+
+/* CHẾ ĐỘ THI CÓ KIỂM SOÁT & CHỐNG GIAN LẬN */
+.anticheat-violation-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(185, 28, 28, 0.95);
+  backdrop-filter: blur(12px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  text-align: center;
+  padding: 2.5rem;
+  user-select: none;
+  animation: shakeAlert 0.4s ease;
+}
+
+@keyframes shakeAlert {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-10px); }
+  40%, 80% { transform: translateX(10px); }
+}
+
+.no-select {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -khtml-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
 }
