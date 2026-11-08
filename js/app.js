@@ -49,14 +49,15 @@
     }
   } catch (e) {}
 
-  // Lắng nghe đồng bộ Realtime giữa tab Giáo viên và Học sinh
-  if (Store.liveChannel) {
-    Store.liveChannel.onmessage = (ev) => {
-      if (ev.data && ev.data.type) {
-        renderApp();
-      }
+  // Lắng nghe đồng bộ Realtime giữa tab Giáo viên và Học sinh (Kênh Đám mây MQTT Đa trình duyệt + Kênh Cục bộ)
+  if (Store.localBroadcast) {
+    Store.localBroadcast.onmessage = () => {
+      renderApp();
     };
   }
+  window.addEventListener("APP_REALTIME_SYNC", () => {
+    renderApp();
+  });
   window.addEventListener("storage", () => {
     renderApp();
   });

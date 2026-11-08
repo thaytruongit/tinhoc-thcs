@@ -1,11 +1,8 @@
 /**
- * STORE & REALTIME ENGINE (js/store.js)
- * Quản lý toàn bộ trạng thái:
- * - 670 Học sinh (15 lớp Khối 6, 7, 8, 9), Thêm/Sửa/Xóa & Nạp hàng loạt (Họ tên, Ngày sinh, Lớp) -> Tự sinh TK, MK 123
- * - Admin (Tài khoản: admin, Mật khẩu: 666)
- * - Động cơ Điều phối Phòng Live (Chuyển 3 hoạt động, Bật/Tắt Slide Ghi vở, Khóa/Mở màn hình, Ghép cặp nhóm)
- * - Cổng Học tập tại nhà (Tìm hiểu bài trước, Ôn luyện 29 tiết, Kiểm tra định kỳ, So sánh Cá nhân vs Lớp & Khối)
- * - Cầu nối nộp file Thực hành (.docx, .xlsx, .pptx) tự chạy về Google Drive của Thầy (H:\My Drive\Giảng dạy)
+ * STORE & HYBRID REALTIME ENGINE (js/store.js)
+ * Tích hợp Kênh truyền Thời gian thực Đám mây (MQTT over WSS) + Kênh Nội bộ (BroadcastChannel/localStorage)
+ * Hoạt động hoàn hảo giữa các Trình duyệt khác nhau (Google Chrome vs Microsoft Edge)
+ * và giữa 45 máy tính độc lập trong phòng máy trường học (LAN/Internet).
  */
 
 (function () {
@@ -16,14 +13,145 @@
     WORKSHEET_SUBS: "THCS_MD_WORKSHEET_SUBS_V2",
     MINIGAME_SUBS: "THCS_MD_MINIGAME_SUBS_V2",
     DRIVE_SUBS: "THCS_MD_DRIVE_SUBS_V2",
-    HOME_PROGRESS: "THCS_MD_HOME_PROGRESS_V2",
     GAS_CONFIG: "THCS_MD_GAS_CONFIG_V2",
     SESSION_USER: "THCS_MD_SESSION_USER_V2"
   };
 
-  const liveChannel = typeof BroadcastChannel !== "undefined"
-    ? new BroadcastChannel("THCS_MAO_DIEN_LIVE_SYNC")
+  // Kênh cục bộ trong cùng 1 trình duyệt
+  const localBroadcast = typeof BroadcastChannel !== "undefined"
+    ? new BroadcastChannel("THCS_MAO_DIEN_LOCAL_SYNC")
     : null;
+
+  // Cấu hình Kênh Đám mây MQTT WSS (Miễn phí, chuẩn bảo mật WSS chạy trên mọi mạng LAN trường học)
+  const MQTT_BROKERS = [
+    "wss://broker.emqx.io:8084/mqtt",
+    "wss://broker.hivemq.com:8884/mqtt"
+  ];
+  const MQTT_TOPIC_PREFIX = "thcs-maodien/tinhoc-thcs/";
+  const LIVE_ROOM_TOPIC = MQTT_TOPIC_PREFIX + "live-room-main";
+  const LIVE_EVENT_TOPIC = MQTT_TOPIC_PREFIX + "live-events";
+
+  let mqttClient = null;
+  let isMqttConnected = false;
+
+  function initMqttCloudSync() {
+    if (typeof mqtt === "undefined") {
+      console.warn("MQTT library not loaded, falling back to local broadcast only.");
+      return;
+    }
+
+    const clientId = "client_" + Math.random().toString(16).substring(2, 10);
+    const brokerUrl = MQTT_BROKERS[0];
+
+    try {
+      mqttClient = mqtt.connect(brokerUrl, {
+        clientId: clientId,
+        clean: true,
+        connectTimeout: 5000,
+        reconnectPeriod: 2500,
+        keepalive: 30
+      });
+
+      mqttClient.on("connect", () => {
+        isMqttConnected = true;
+        console.log("⚡ Realtime Cloud WSS Connected:", brokerUrl);
+        // Lắng nghe lệnh từ Giáo viên và sự kiện từ toàn bộ máy Học sinh
+        mqttClient.subscribe([LIVE_ROOM_TOPIC, LIVE_EVENT_TOPIC], { qos: 1 });
+
+        // Học sinh vừa mở trang sẽ phát tín hiệu xin đồng bộ trạng thái mới nhất từ máy Giáo viên
+        const user = getSessionUser();
+        if (user && user.role === "student") {
+          publishMqtt(LIVE_EVENT_TOPIC, { type: "REQUEST_CURRENT_STATE", from: user.username });
+        }
+      });
+
+      mqttClient.on("message", (topic, message) => {
+        try {
+          const data = JSON.parse(message.toString());
+          handleIncomingRealtimeMessage(topic, data);
+        } catch (e) {
+          console.error("MQTT Message Parse Error:", e);
+        }
+      });
+
+      mqttClient.on("error", (err) => {
+        console.warn("MQTT Connection Warning:", err);
+      });
+
+      mqttClient.on("close", () => {
+        isMqttConnected = false;
+      });
+    } catch (e) {
+      console.warn("MQTT Init Exception:", e);
+    }
+  }
+
+  function publishMqtt(topic, payload, retain = false) {
+    if (mqttClient && isMqttConnected) {
+      try {
+        mqttClient.publish(topic, JSON.stringify(payload), { qos: 1, retain: retain });
+      } catch (e) {}
+    }
+  }
+
+  function handleIncomingRealtimeMessage(topic, data) {
+    if (!data || !data.type) return;
+
+    if (topic === LIVE_ROOM_TOPIC || data.type === "LIVE_STATE_CHANGED") {
+      // Nhận trạng thái mới nhất từ Giáo viên phát xuống
+      if (data.payload) {
+        localStorage.setItem(STORAGE_KEYS.LIVE_STATE, JSON.stringify(data.payload));
+        window.dispatchEvent(new CustomEvent("APP_REALTIME_SYNC", { detail: data.payload }));
+      }
+    } else if (topic === LIVE_EVENT_TOPIC) {
+      if (data.type === "REQUEST_CURRENT_STATE") {
+        // Nếu là máy Giáo viên, trả lời ngay trạng thái hiện tại kèm cờ retain
+        const user = getSessionUser();
+        if (user && user.role === "admin") {
+          const current = loadLiveState();
+          publishMqtt(LIVE_ROOM_TOPIC, { type: "LIVE_STATE_CHANGED", payload: current }, true);
+        }
+      } else if (data.type === "STUDENT_SUBMISSION") {
+        // Nhận bài nộp của học sinh (Phiếu nhóm / Minigame / Drive) cập nhật vào danh sách của GV
+        const sub = data.payload;
+        if (sub.subType === "worksheet") {
+          const list = loadJSON(STORAGE_KEYS.WORKSHEET_SUBS, []);
+          if (!list.some(x => x.id === sub.id)) {
+            list.unshift(sub);
+            localStorage.setItem(STORAGE_KEYS.WORKSHEET_SUBS, JSON.stringify(list));
+          }
+        } else if (sub.subType === "minigame") {
+          const list = loadJSON(STORAGE_KEYS.MINIGAME_SUBS, []);
+          if (!list.some(x => x.id === sub.id)) {
+            list.unshift(sub);
+            localStorage.setItem(STORAGE_KEYS.MINIGAME_SUBS, JSON.stringify(list));
+          }
+        } else if (sub.subType === "drive") {
+          const list = loadJSON(STORAGE_KEYS.DRIVE_SUBS, []);
+          if (!list.some(x => x.id === sub.id)) {
+            list.unshift(sub);
+            localStorage.setItem(STORAGE_KEYS.DRIVE_SUBS, JSON.stringify(list));
+          }
+        }
+        window.dispatchEvent(new CustomEvent("APP_REALTIME_SYNC", { detail: sub }));
+      } else if (data.type === "GROUP_REGISTERED") {
+        const groups = loadJSON(STORAGE_KEYS.GROUPS_LIST, []);
+        if (!groups.some(g => g.groupId === data.payload.groupId)) {
+          groups.push(data.payload);
+          localStorage.setItem(STORAGE_KEYS.GROUPS_LIST, JSON.stringify(groups));
+          window.dispatchEvent(new CustomEvent("APP_REALTIME_SYNC", { detail: groups }));
+        }
+      }
+    }
+  }
+
+  function getSessionUser() {
+    try {
+      const raw = sessionStorage.getItem(STORAGE_KEYS.SESSION_USER);
+      if (raw) return JSON.parse(raw);
+    } catch (e) {}
+    return null;
+  }
 
   function removeVietnameseAccents(str) {
     if (!str) return "";
@@ -63,16 +191,13 @@
           return parsed;
         }
       }
-    } catch (e) {
-      console.warn("Load students DB fallback to initial:", e);
-    }
+    } catch (e) {}
     const initial = window.INITIAL_STUDENTS_DB || { adminAccount: { username: "admin", password: "666" }, classes: [], students: [] };
     localStorage.setItem(STORAGE_KEYS.STUDENTS_DB, JSON.stringify(initial));
     return JSON.parse(JSON.stringify(initial));
   }
 
   function saveStudentsDB(db) {
-    // Recompute class counts
     const classMap = {};
     db.students.forEach(s => {
       const cid = String(s.className || "").toUpperCase();
@@ -84,7 +209,7 @@
     });
     db.classes = Object.values(classMap).sort((a, b) => a.grade - b.grade || a.id.localeCompare(b.id));
     localStorage.setItem(STORAGE_KEYS.STUDENTS_DB, JSON.stringify(db));
-    broadcastEvent("DB_UPDATED", { timestamp: Date.now() });
+    broadcastLocal("DB_UPDATED", { timestamp: Date.now() });
   }
 
   function getDefaultLiveState() {
@@ -93,8 +218,8 @@
       roomCode: "LIVE-MD",
       grade: 7,
       className: "7A11",
-      period: 12, // Mặc định mở sẵn 1 tiết để GV/HS thấy ngay, GV đổi bất kỳ tiết 1..29
-      currentActivity: 1, // 1: Khám phá (Phiếu nhóm + Ghi vở), 2: Luyện tập (Minigame), 3: Vận dụng/Thực hành (Nộp file Drive)
+      period: 12,
+      currentActivity: 1,
       showNotebookSlide: false,
       screenLocked: false,
       lockMessage: "🔒 MÀN HÌNH ĐANG TẠM KHÓA — Các em hãy hướng mắt lên màn hình máy chiếu và lắng nghe Thầy hướng dẫn!",
@@ -115,7 +240,12 @@
   function saveLiveState(newState) {
     newState.updatedAt = Date.now();
     localStorage.setItem(STORAGE_KEYS.LIVE_STATE, JSON.stringify(newState));
-    broadcastEvent("LIVE_STATE_CHANGED", newState);
+
+    // 1. Phát qua kênh MQTT Đám mây (Đến tất cả trình duyệt khác: Chrome, Edge, 45 PC)
+    publishMqtt(LIVE_ROOM_TOPIC, { type: "LIVE_STATE_CHANGED", payload: newState }, true);
+
+    // 2. Phát qua kênh Cục bộ cùng máy
+    broadcastLocal("LIVE_STATE_CHANGED", newState);
   }
 
   function loadJSON(key, defaultVal) {
@@ -128,18 +258,17 @@
 
   function saveJSON(key, val, eventName) {
     localStorage.setItem(key, JSON.stringify(val));
-    if (eventName) broadcastEvent(eventName, { timestamp: Date.now() });
+    if (eventName) broadcastLocal(eventName, { timestamp: Date.now() });
   }
 
-  function broadcastEvent(type, payload) {
-    if (liveChannel) {
+  function broadcastLocal(type, payload) {
+    if (localBroadcast) {
       try {
-        liveChannel.postMessage({ type, payload });
+        localBroadcast.postMessage({ type, payload });
       } catch (e) {}
     }
   }
 
-  // Cộng điểm bài học và XP đồng thời cho tất cả học sinh trong nhóm
   function creditGroupScoreAndXP(memberIds, lessonId, activityKey, score10, xpEarned) {
     const db = loadStudentsDB();
     const validIds = Array.isArray(memberIds) ? memberIds : [memberIds];
@@ -153,7 +282,6 @@
         const prevActScore = rec[activityKey] || 0;
         rec[activityKey] = Math.max(prevActScore, Number(score10.toFixed(2)));
 
-        // Tính điểm trung bình bài học từ các hoạt động đã tham gia
         const scores = [rec.act1, rec.act2, rec.act3].filter(v => typeof v === "number" && v !== null);
         if (scores.length > 0) {
           rec.final = Number((scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2));
@@ -171,7 +299,6 @@
     saveStudentsDB(db);
   }
 
-  // Tính toán chỉ số cá nhân & so sánh với trung bình Lớp và Khối
   function getStudentAnalytics(studentId) {
     const db = loadStudentsDB();
     const student = db.students.find(s => s.id === studentId);
@@ -243,22 +370,49 @@
     };
   }
 
+  // Khởi động kênh Realtime Đám mây
+  if (typeof window !== "undefined") {
+    setTimeout(initMqttCloudSync, 100);
+  }
+
   window.AppStore = {
     STORAGE_KEYS,
-    liveChannel,
+    localBroadcast,
+    publishMqtt,
+    LIVE_EVENT_TOPIC,
     generateStudentUsername,
     loadStudentsDB,
     saveStudentsDB,
     loadLiveState,
     saveLiveState,
     getGroups: () => loadJSON(STORAGE_KEYS.GROUPS_LIST, []),
-    saveGroups: (list) => saveJSON(STORAGE_KEYS.GROUPS_LIST, list, "GROUPS_UPDATED"),
+    saveGroups: (list) => {
+      saveJSON(STORAGE_KEYS.GROUPS_LIST, list, "GROUPS_UPDATED");
+      if (list.length > 0) {
+        publishMqtt(LIVE_EVENT_TOPIC, { type: "GROUP_REGISTERED", payload: list[list.length - 1] });
+      }
+    },
     getWorksheetSubs: () => loadJSON(STORAGE_KEYS.WORKSHEET_SUBS, []),
-    saveWorksheetSubs: (list) => saveJSON(STORAGE_KEYS.WORKSHEET_SUBS, list, "SUBS_UPDATED"),
+    saveWorksheetSubs: (list) => {
+      saveJSON(STORAGE_KEYS.WORKSHEET_SUBS, list, "SUBS_UPDATED");
+      if (list.length > 0) {
+        publishMqtt(LIVE_EVENT_TOPIC, { type: "STUDENT_SUBMISSION", payload: { ...list[0], subType: "worksheet" } });
+      }
+    },
     getMinigameSubs: () => loadJSON(STORAGE_KEYS.MINIGAME_SUBS, []),
-    saveMinigameSubs: (list) => saveJSON(STORAGE_KEYS.MINIGAME_SUBS, list, "SUBS_UPDATED"),
+    saveMinigameSubs: (list) => {
+      saveJSON(STORAGE_KEYS.MINIGAME_SUBS, list, "SUBS_UPDATED");
+      if (list.length > 0) {
+        publishMqtt(LIVE_EVENT_TOPIC, { type: "STUDENT_SUBMISSION", payload: { ...list[0], subType: "minigame" } });
+      }
+    },
     getDriveSubs: () => loadJSON(STORAGE_KEYS.DRIVE_SUBS, []),
-    saveDriveSubs: (list) => saveJSON(STORAGE_KEYS.DRIVE_SUBS, list, "DRIVE_SUBS_UPDATED"),
+    saveDriveSubs: (list) => {
+      saveJSON(STORAGE_KEYS.DRIVE_SUBS, list, "DRIVE_SUBS_UPDATED");
+      if (list.length > 0) {
+        publishMqtt(LIVE_EVENT_TOPIC, { type: "STUDENT_SUBMISSION", payload: { ...list[0], subType: "drive" } });
+      }
+    },
     getGasConfig: () => loadJSON(STORAGE_KEYS.GAS_CONFIG, {
       gasWebAppUrl: "",
       driveFolderId: "",
