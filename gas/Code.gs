@@ -87,7 +87,11 @@ function doPost(e) {
     const payload = JSON.parse(e.postData.contents);
     const action = payload.action || "uploadPracticalFile";
 
-    if (action === "uploadHomeworkFile") {
+    if (action === "backupCloudDB") {
+      return handleBackupCloudDB(payload);
+    } else if (action === "restoreCloudDB") {
+      return handleRestoreCloudDB();
+    } else if (action === "uploadHomeworkFile") {
       return handleHomeworkUpload(payload);
     } else if (action === "uploadAssignmentAttachment") {
       return handleAssignmentAttachmentUpload(payload);
@@ -512,6 +516,69 @@ function handleSyncReport(payload) {
     status: "ok",
     syncedCount: (payload.rows || []).length,
     timestamp: Utilities.formatDate(new Date(), "Asia/Ho_Chi_Minh", "dd/MM/yyyy HH:mm:ss")
+  });
+}
+
+/**
+ * Xử lý sao lưu toàn bộ cơ sở dữ liệu học sinh, điểm số, huy hiệu lên Google Drive
+ */
+function handleBackupCloudDB(payload) {
+  const rootIter = DriveApp.getFoldersByName(CONFIG.ROOT_FOLDER);
+  const rootFolder = rootIter.hasNext() ? rootIter.next() : DriveApp.createFolder(CONFIG.ROOT_FOLDER);
+  const subIter = rootFolder.getFoldersByName(CONFIG.SUB_FOLDER);
+  const baseFolder = subIter.hasNext() ? subIter.next() : rootFolder.createFolder(CONFIG.SUB_FOLDER);
+
+  const backupFileName = "HE_THONG_TINHOC_THCS_DB.json";
+  const jsonString = JSON.stringify(payload.database || {}, null, 2);
+
+  const files = baseFolder.getFilesByName(backupFileName);
+  let file;
+  if (files.hasNext()) {
+    file = files.next();
+    file.setContent(jsonString);
+  } else {
+    file = baseFolder.createFile(backupFileName, jsonString, "application/json");
+  }
+
+  const nowVN = Utilities.formatDate(new Date(), "Asia/Ho_Chi_Minh", "dd/MM/yyyy HH:mm:ss");
+  file.setDescription("Bản sao lưu toàn bộ dữ liệu học sinh, điểm số, bài học và huy hiệu vinh danh - Cập nhật: " + nowVN);
+
+  return jsonResponse({
+    status: "ok",
+    message: "Đã sao lưu thành công toàn bộ cơ sở dữ liệu và huy hiệu lên Google Drive!",
+    fileId: file.getId(),
+    fileUrl: file.getUrl(),
+    timestamp: nowVN,
+    studentCount: ((payload.database && payload.database.students) || []).length
+  });
+}
+
+/**
+ * Xử lý khôi phục cơ sở dữ liệu học sinh từ Google Drive
+ */
+function handleRestoreCloudDB() {
+  const rootIter = DriveApp.getFoldersByName(CONFIG.ROOT_FOLDER);
+  if (!rootIter.hasNext()) {
+    return jsonResponse({ status: "error", message: "Chưa tìm thấy thư mục lưu trữ trên Google Drive" });
+  }
+  const rootFolder = rootIter.next();
+  const subIter = rootFolder.getFoldersByName(CONFIG.SUB_FOLDER);
+  if (!subIter.hasNext()) {
+    return jsonResponse({ status: "error", message: "Chưa có thư mục bài thực hành trên Google Drive" });
+  }
+  const baseFolder = subIter.next();
+  const files = baseFolder.getFilesByName("HE_THONG_TINHOC_THCS_DB.json");
+  if (!files.hasNext()) {
+    return jsonResponse({ status: "error", message: "Chưa có bản sao lưu nào trên Google Drive. Vui lòng bấm Sao lưu trước!" });
+  }
+  const file = files.next();
+  const content = file.getBlob().getDataAsString();
+  const database = JSON.parse(content);
+  return jsonResponse({
+    status: "ok",
+    database: database,
+    updatedAt: Utilities.formatDate(file.getLastUpdated(), "Asia/Ho_Chi_Minh", "dd/MM/yyyy HH:mm:ss"),
+    studentCount: ((database && database.students) || []).length
   });
 }
 

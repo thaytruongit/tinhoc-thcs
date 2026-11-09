@@ -627,7 +627,125 @@
     }
   }
 
-  function creditGroupScoreAndXP(memberIds, lessonId, activityKey, score10, xpEarned) {
+  // ============================================================================
+  // HỆ THỐNG HUY HIỆU & VINH DANH HỌC SINH (BADGES & HONOR ROLL)
+  // ============================================================================
+  const BADGES_DEFINITIONS = [
+    {
+      id: "badge_first_step",
+      icon: "🌟",
+      title: "Khởi Đầu Nan",
+      description: "Hoàn thành bài học đầu tiên trong chương trình",
+      condition: (st) => (st.completedLessons || []).length >= 1,
+      xpReward: 50
+    },
+    {
+      id: "badge_combo_master",
+      icon: "⚡",
+      title: "Tia Chớp Minigame",
+      description: "Đạt chuỗi đúng liên tiếp từ 3 câu trở lên trong Minigame",
+      condition: (st, ctx) => (ctx && ctx.maxStreak >= 3),
+      xpReward: 100
+    },
+    {
+      id: "badge_practical_star",
+      icon: "🎯",
+      title: "Tay Nghề Xuất Sắc",
+      description: "Đạt điểm 9.0 - 10 trong bài thực hành nộp Google Drive",
+      condition: (st) => Object.values(st.lessonScores || {}).some(r => Number(r.act3 || 0) >= 9.0),
+      xpReward: 150
+    },
+    {
+      id: "badge_team_player",
+      icon: "🤝",
+      title: "Đồng Đội Vàng",
+      description: "Ghép cặp nhóm máy và cùng hoàn thành từ 2 bài học trở lên",
+      condition: (st) => (st.completedLessons || []).length >= 2,
+      xpReward: 100
+    },
+    {
+      id: "badge_exam_ace",
+      icon: "🏆",
+      title: "Thủ Khoa Định Kỳ",
+      description: "Đạt điểm từ 9.0 trở lên trong bài kiểm tra định kỳ có kiểm soát",
+      condition: (st) => Object.values(st.examScores || {}).some(e => Number(e.score || 0) >= 9.0),
+      xpReward: 200
+    },
+    {
+      id: "badge_diligent",
+      icon: "📚",
+      title: "Học Bá Chăm Chỉ",
+      description: "Hoàn thành từ 5 bài học trở lên trong năm học",
+      condition: (st) => (st.completedLessons || []).length >= 5,
+      xpReward: 200
+    },
+    {
+      id: "badge_class_top",
+      icon: "🥇",
+      title: "Ngôi Sao Lớp Học",
+      description: "Đạt vị trí Top 3 trên Bảng xếp hạng của Lớp",
+      condition: (st, ctx, rank) => rank && rank <= 3,
+      xpReward: 250
+    },
+    {
+      id: "badge_grandmaster",
+      icon: "👑",
+      title: "Bậc Thầy Tin Học",
+      description: "Đạt Cấp độ 5 trở lên hoặc tích lũy từ 2000 XP",
+      condition: (st) => Number(st.level || 1) >= 5 || Number(st.xp || 0) >= 2000,
+      xpReward: 300
+    }
+  ];
+
+  function evaluateStudentBadges(studentId, context) {
+    const db = loadStudentsDB();
+    const st = db.students.find(s => s.id === studentId);
+    if (!st) return [];
+
+    if (!Array.isArray(st.badges)) st.badges = [];
+    const newlyAwarded = [];
+
+    // Tính thứ hạng lớp để xét huy hiệu Top lớp
+    let classRank = null;
+    try {
+      const analytics = getStudentAnalytics(studentId);
+      if (analytics) classRank = analytics.classRank;
+    } catch (e) {}
+
+    BADGES_DEFINITIONS.forEach(b => {
+      if (!st.badges.includes(b.id)) {
+        try {
+          if (b.condition(st, context, classRank)) {
+            st.badges.push(b.id);
+            st.xp = (Number(st.xp) || 0) + b.xpReward;
+            st.level = Math.floor(st.xp / 500) + 1;
+            newlyAwarded.push(b);
+          }
+        } catch (err) {}
+      }
+    });
+
+    if (newlyAwarded.length > 0) {
+      saveStudentsDB(db);
+      newlyAwarded.forEach(b => {
+        publishMqtt(LIVE_EVENT_TOPIC, {
+          type: "BADGE_AWARDED",
+          payload: {
+            studentId: st.id,
+            studentName: st.fullName,
+            className: st.className,
+            badge: b,
+            timestamp: UtilitiesFormatDateNow()
+          }
+        });
+      });
+      window.dispatchEvent(new CustomEvent("BADGE_UNLOCKED", { detail: { student: st, badges: newlyAwarded } }));
+    }
+
+    return newlyAwarded;
+  }
+
+  function creditGroupScoreAndXP(memberIds, lessonId, activityKey, score10, xpEarned, context) {
     const db = loadStudentsDB();
     const validIds = Array.isArray(memberIds) ? memberIds : [memberIds];
     db.students.forEach(st => {
@@ -655,6 +773,11 @@
       }
     });
     saveStudentsDB(db);
+
+    // Tự động kiểm tra và trao tặng huy hiệu cho tất cả thành viên trong nhóm
+    validIds.forEach(id => {
+      evaluateStudentBadges(id, context);
+    });
   }
 
   function getStudentAnalytics(studentId) {
@@ -733,6 +856,68 @@
     setTimeout(initMqttCloudSync, 100);
   }
 
+  // ============================================================================
+  // CƠ CHẾ LƯU TRỮ LÂU DÀI: SAO LƯU ĐÁM MÂY GOOGLE DRIVE & XUẤT NHẬP TỆP JSON
+  // ============================================================================
+  async function backupDBToCloud() {
+    const cfg = loadJSON(STORAGE_KEYS.GAS_CONFIG, {});
+    if (!cfg.gasWebAppUrl || !cfg.gasWebAppUrl.startsWith("http")) {
+      throw new Error("Chưa cấu hình URL Web App Google Apps Script!");
+    }
+    const db = loadStudentsDB();
+    const res = await fetch(cfg.gasWebAppUrl, {
+      method: "POST",
+      body: JSON.stringify({
+        action: "backupCloudDB",
+        database: db
+      })
+    });
+    return await res.json();
+  }
+
+  async function restoreDBFromCloud() {
+    const cfg = loadJSON(STORAGE_KEYS.GAS_CONFIG, {});
+    if (!cfg.gasWebAppUrl || !cfg.gasWebAppUrl.startsWith("http")) {
+      throw new Error("Chưa cấu hình URL Web App Google Apps Script!");
+    }
+    const res = await fetch(cfg.gasWebAppUrl, {
+      method: "POST",
+      body: JSON.stringify({
+        action: "restoreCloudDB"
+      })
+    });
+    const json = await res.json();
+    if (json && json.status === "ok" && json.database) {
+      saveStudentsDB(json.database);
+      return json;
+    }
+    throw new Error(json.message || "Không thể tải dữ liệu từ Google Drive");
+  }
+
+  function exportDBToJSON() {
+    const db = loadStudentsDB();
+    const jsonStr = JSON.stringify(db, null, 2);
+    const blob = new Blob([jsonStr], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    a.href = url;
+    a.download = `THCS_MaoDien_DuLieuHocSinh_${dateStr}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function importDBFromJSON(jsonString) {
+    const parsed = JSON.parse(jsonString);
+    if (!parsed || !Array.isArray(parsed.students)) {
+      throw new Error("Định dạng tệp sao lưu không hợp lệ (Thiếu danh sách students)!");
+    }
+    saveStudentsDB(parsed);
+    return parsed;
+  }
+
   window.AppStore = {
     STORAGE_KEYS,
     localBroadcast,
@@ -754,16 +939,13 @@
     getExamViolations,
     saveExamSubmission,
     getExamSubmissions,
-    // Quản lý Bài tập về nhà & Dữ liệu thô
+    // Quản lý bài tập về nhà & dữ liệu đính kèm
     getHomeworkAssignments,
     saveHomeworkAssignments,
-    addOrUpdateHomeworkAssignment,
-    deleteHomeworkAssignment,
+    saveSingleHomeworkAssignment,
     getHomeworkSubs,
-    saveHomeworkSubs,
     saveHomeworkSubmission,
-    gradeHomeworkSub,
-    // Các hoạt động khác
+    gradeHomeworkSubmission,
     getGroups: () => loadJSON(STORAGE_KEYS.GROUPS_LIST, []),
     saveGroups: (list) => {
       saveJSON(STORAGE_KEYS.GROUPS_LIST, list, "GROUPS_UPDATED");
@@ -799,6 +981,13 @@
     }),
     saveGasConfig: (cfg) => saveJSON(STORAGE_KEYS.GAS_CONFIG, cfg, "CONFIG_UPDATED"),
     creditGroupScoreAndXP,
-    getStudentAnalytics
+    getStudentAnalytics,
+    // Hệ thống Huy hiệu & Lưu trữ lâu dài
+    BADGES_DEFINITIONS,
+    evaluateStudentBadges,
+    backupDBToCloud,
+    restoreDBFromCloud,
+    exportDBToJSON,
+    importDBFromJSON
   };
 })();

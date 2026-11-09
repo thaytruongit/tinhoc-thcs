@@ -772,6 +772,11 @@
               }">
                 📊 Tiến độ & So sánh Lớp/Khối
               </button>
+              <button data-st-tab="honors" class="px-3.5 py-2 rounded-lg text-xs font-bold transition ${
+                state.studentTab === "honors" ? "bg-amber-500 text-white shadow" : "text-slate-600 hover:bg-white"
+              }">
+                🏆 Huy Hiệu & Vinh Danh
+              </button>
             </nav>
 
             <button id="btn-logout" class="px-3 py-2 rounded-xl border border-slate-300 hover:bg-red-50 hover:text-red-600 text-xs font-bold text-slate-600">
@@ -788,6 +793,7 @@
           ${state.studentTab === "practice" ? renderStudentSelfPractice(freshStudent) : ""}
           ${state.studentTab === "exams" ? renderStudentPeriodicExams(freshStudent) : ""}
           ${state.studentTab === "analytics" ? renderStudentAnalyticsView(freshStudent) : ""}
+          ${state.studentTab === "honors" ? renderStudentHonorsView(freshStudent, db) : ""}
         </main>
       </div>
     `;
@@ -1818,6 +1824,175 @@
     `;
   }
 
+  // ----------------------------------------------------------------------------
+  // 2.6. BẢNG VINH DANH HỌC SINH XUẤT SẮC & TỦ HUY HIỆU DANH GIÁ
+  // ----------------------------------------------------------------------------
+  function renderStudentHonorsView(student, db) {
+    const badgesDef = Store.BADGES_DEFINITIONS || [];
+    const myBadges = Array.isArray(student.badges) ? student.badges : [];
+    const unlockedCount = badgesDef.filter(b => myBadges.includes(b.id)).length;
+
+    // Lấy top 3 của lớp
+    const classPeers = db.students.filter(s => s.className === student.className);
+    const sortedClass = [...classPeers].sort((a, b) => (Number(b.xp) || 0) - (Number(a.xp) || 0) || (b.level || 1) - (a.level || 1));
+    const top3Class = sortedClass.slice(0, 3);
+
+    // Lấy top 5 của khối
+    const gradePeers = db.students.filter(s => Number(s.grade) === Number(student.grade));
+    const sortedGrade = [...gradePeers].sort((a, b) => (Number(b.xp) || 0) - (Number(a.xp) || 0) || (b.level || 1) - (a.level || 1));
+    const top5Grade = sortedGrade.slice(0, 5);
+
+    return `
+      <div class="space-y-6">
+        <!-- Banner Vinh Danh -->
+        <div class="bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 rounded-3xl p-6 text-white shadow-xl flex flex-wrap items-center justify-between gap-4">
+          <div class="space-y-1">
+            <div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/20 text-xs font-bold uppercase tracking-wider">
+              🏆 BẢNG VÀNG DANH DỰ • TRƯỜNG THCS MÃO ĐIỀN
+            </div>
+            <h2 class="text-2xl font-black">VINH DANH HỌC SINH XUẤT SẮC & TỦ HUY HIỆU TIN HỌC</h2>
+            <p class="text-amber-100 text-sm max-w-xl">
+              Hệ thống ghi nhận và lưu trữ lâu dài toàn bộ thành tích, chuỗi nỗ lực và sự tiến bộ vượt bậc của học sinh trong môn Tin học THCS.
+            </p>
+          </div>
+          <div class="bg-white/15 backdrop-blur-md border border-white/25 rounded-2xl p-4 text-center min-w-[160px]">
+            <div class="text-xs uppercase text-amber-100 font-bold">Huy hiệu đã đạt</div>
+            <div class="text-3xl font-black mt-1">${unlockedCount} / ${badgesDef.length}</div>
+            <div class="text-[11px] text-amber-200 mt-0.5">Cấp độ ${student.level || 1} • ${student.xp || 0} XP</div>
+          </div>
+        </div>
+
+        <!-- 1. BẢNG VÀNG VINH DANH (TOP 3 LỚP & TOP 5 TOÀN KHỐI) -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <!-- Top 3 của Lớp -->
+          <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-4">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 class="font-extrabold text-slate-800 text-sm flex items-center gap-2">
+                <span>🥇</span> TOP 3 THỦ KHOA LỚP ${escapeHtml(student.className)}
+              </h3>
+              <span class="text-xs text-slate-400 font-medium">Theo Điểm XP & Năng lực</span>
+            </div>
+            <div class="space-y-3">
+              ${top3Class.map((st, idx) => {
+                const isMe = st.id === student.id;
+                const medals = ["🥇", "🥈", "🥉"];
+                const bgColors = ["bg-amber-50 border-amber-300", "bg-slate-50 border-slate-300", "bg-orange-50 border-orange-200"];
+                return `
+                  <div class="p-3.5 rounded-xl border flex items-center justify-between gap-3 transition-all ${bgColors[idx] || 'bg-white border-slate-200'} ${isMe ? 'ring-2 ring-amber-400 shadow-md' : ''}">
+                    <div class="flex items-center gap-3 min-w-0">
+                      <span class="text-2xl flex-shrink-0">${medals[idx] || `#${idx+1}`}</span>
+                      <div class="min-w-0">
+                        <div class="font-bold text-sm text-slate-900 flex items-center gap-1.5 truncate">
+                          <span>${escapeHtml(st.fullName)}</span>
+                          ${isMe ? `<span class="text-[10px] px-1.5 py-0.2 rounded bg-amber-500 text-white font-extrabold">EM</span>` : ''}
+                        </div>
+                        <div class="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+                          <span class="font-mono">#${String(st.stt).padStart(2, '0')}</span>
+                          <span>•</span>
+                          <span>Cấp độ ${st.level || 1}</span>
+                          <span>•</span>
+                          <span>${(st.badges || []).length} huy hiệu</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="text-right flex-shrink-0">
+                      <div class="font-extrabold text-sm text-amber-700">${st.xp || 0} XP</div>
+                      <div class="text-[11px] text-slate-400">${(st.completedLessons || []).length}/29 Tiết</div>
+                    </div>
+                  </div>
+                `;
+              }).join("")}
+            </div>
+          </div>
+
+          <!-- Top 5 Bảng Vàng Toàn Khối -->
+          <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-4">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 class="font-extrabold text-slate-800 text-sm flex items-center gap-2">
+                <span>🌟</span> TOP 5 BẢNG VÀNG TOÀN KHỐI ${student.grade}
+              </h3>
+              <span class="text-xs text-slate-400 font-medium">Toàn bộ 4 lớp Khối ${student.grade}</span>
+            </div>
+            <div class="space-y-2.5">
+              ${top5Grade.map((st, idx) => {
+                const isMe = st.id === student.id;
+                return `
+                  <div class="p-2.5 rounded-xl border flex items-center justify-between gap-2 text-xs transition-all ${
+                    isMe ? 'bg-amber-50 border-amber-300 font-bold shadow-xs' : 'bg-slate-50/70 border-slate-200'
+                  }">
+                    <div class="flex items-center gap-2.5 min-w-0">
+                      <span class="font-bold text-slate-400 font-mono w-5">#0${idx + 1}</span>
+                      <span class="font-extrabold text-slate-800 truncate">${escapeHtml(st.fullName)}</span>
+                      <span class="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-bold text-[10px]">${escapeHtml(st.className)}</span>
+                    </div>
+                    <div class="flex items-center gap-3 flex-shrink-0">
+                      <span class="font-bold text-purple-700">${st.xp || 0} XP</span>
+                      <span class="text-slate-400 text-[11px]">Lv.${st.level || 1}</span>
+                    </div>
+                  </div>
+                `;
+              }).join("")}
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. TỦ HUY HIỆU DANH GIÁ CÁ NHÂN -->
+        <div class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-5">
+          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+            <div>
+              <h3 class="text-base font-extrabold text-slate-900 flex items-center gap-2">
+                <span>🎖️</span> TỦ HUY HIỆU DANH GIÁ CỦA EM
+              </h3>
+              <p class="text-xs text-slate-500 mt-0.5">
+                Mỗi huy hiệu là một mốc son ghi nhận kỹ năng số, nỗ lực thực hành và tinh thần làm việc nhóm
+              </p>
+            </div>
+            <span class="text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-xl">
+              Đã mở khóa: ${unlockedCount} / ${badgesDef.length} Huy hiệu
+            </span>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            ${badgesDef.map(b => {
+              const isUnlocked = myBadges.includes(b.id);
+              return `
+                <div class="p-4 rounded-2xl border transition-all flex flex-col justify-between ${
+                  isUnlocked
+                    ? 'bg-gradient-to-br from-amber-50 via-orange-50 to-amber-50 border-amber-300 shadow-sm hover:shadow-md'
+                    : 'bg-slate-50/60 border-slate-200 opacity-60'
+                }">
+                  <div>
+                    <div class="flex items-center justify-between mb-3">
+                      <div class="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shadow-sm ${
+                        isUnlocked ? 'bg-amber-400 text-white' : 'bg-slate-200 text-slate-400'
+                      }">
+                        ${isUnlocked ? b.icon : '🔒'}
+                      </div>
+                      ${isUnlocked ? `
+                        <span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold flex items-center gap-1">
+                          <span>✓</span> ĐÃ ĐẠT
+                        </span>
+                      ` : `
+                        <span class="px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 text-[10px] font-bold">
+                          CHƯA MỞ
+                        </span>
+                      `}
+                    </div>
+                    <h4 class="font-extrabold text-sm text-slate-900 mb-1">${escapeHtml(b.title)}</h4>
+                    <p class="text-xs text-slate-600 leading-relaxed mb-3">${escapeHtml(b.description)}</p>
+                  </div>
+                  <div class="pt-2 border-t border-slate-200/60 flex items-center justify-between text-xs font-bold">
+                    <span class="text-amber-700">+${b.xpReward} XP Thưởng</span>
+                    <span class="text-[11px] text-slate-400">${isUnlocked ? 'Đã kích hoạt' : 'Nhiệm vụ'}</span>
+                  </div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        </div>
+      </div>
+    `;
+  }
 
   let antiCheatVisibilityHandler = null;
   let antiCheatBlurHandler = null;
@@ -3161,6 +3336,44 @@
         <button id="btn-save-gas-config" class="px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow">
           💾 Lưu Cấu hình Kết nối Google Drive
         </button>
+
+        <!-- QUẢN LÝ LƯU TRỮ LÂU DÀI: SAO LƯU ĐÁM MÂY GOOGLE DRIVE & XUẤT NHẬP FILE JSON -->
+        <div class="pt-6 border-t border-slate-200 space-y-4">
+          <div>
+            <span class="text-xs font-bold text-indigo-600 uppercase">Bảo Vệ Dữ Liệu Học Sinh, Điểm Số & Huy Hiệu</span>
+            <h3 class="text-lg font-extrabold text-slate-900">☁️ Lưu Trữ Lâu Dài & Sao Lưu Dữ Liệu Đa Tầng</h3>
+            <p class="text-xs text-slate-500 mt-0.5">
+              Đảm bảo điểm số, cấp độ, huy hiệu và tiến độ học tập của 670 học sinh không bị mất khi đóng băng ổ cứng phòng máy hoặc chuyển máy khác.
+            </p>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <button id="btn-cloud-backup" class="p-4 rounded-2xl bg-blue-50 border border-blue-200 hover:bg-blue-100 text-left transition space-y-1">
+              <div class="text-2xl">☁️</div>
+              <div class="font-extrabold text-xs text-blue-900 uppercase">Sao lưu lên Drive</div>
+              <div class="text-[11px] text-blue-700">Đẩy toàn bộ cơ sở dữ liệu lên file JSON trên Google Drive</div>
+            </button>
+
+            <button id="btn-cloud-restore" class="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-left transition space-y-1">
+              <div class="text-2xl">🔄</div>
+              <div class="font-extrabold text-xs text-emerald-900 uppercase">Khôi phục từ Drive</div>
+              <div class="text-[11px] text-emerald-700">Tải bản sao lưu mới nhất từ Google Drive về máy này</div>
+            </button>
+
+            <button id="btn-export-json" class="p-4 rounded-2xl bg-purple-50 border border-purple-200 hover:bg-purple-100 text-left transition space-y-1">
+              <div class="text-2xl">💾</div>
+              <div class="font-extrabold text-xs text-purple-900 uppercase">Xuất File (.json)</div>
+              <div class="text-[11px] text-purple-700">Tải file JSON về máy tính lưu trữ offline hoặc chia sẻ</div>
+            </button>
+
+            <label class="p-4 rounded-2xl bg-amber-50 border border-amber-200 hover:bg-amber-100 text-left transition space-y-1 cursor-pointer block">
+              <div class="text-2xl">📂</div>
+              <div class="font-extrabold text-xs text-amber-900 uppercase">Nạp File (.json)</div>
+              <div class="text-[11px] text-amber-700">Chọn file sao lưu JSON để nạp lại dữ liệu học sinh</div>
+              <input id="input-import-json" type="file" accept=".json" class="hidden" />
+            </label>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -3564,6 +3777,72 @@
         const gasWebAppUrl = (document.getElementById("cfg-gas-url")?.value || "").trim();
         Store.saveGasConfig({ driveLocalPath, driveFolderId, gasWebAppUrl });
         showToast("Đã lưu cấu hình kết nối Google Drive!");
+      };
+    }
+
+    // Sao lưu Cloud Google Drive
+    const btnCloudBackup = document.getElementById("btn-cloud-backup");
+    if (btnCloudBackup) {
+      btnCloudBackup.onclick = async () => {
+        try {
+          btnCloudBackup.disabled = true;
+          showToast("Đang đồng bộ và sao lưu dữ liệu lên Google Drive...");
+          const res = await Store.backupDBToCloud();
+          showToast(`✅ Đã sao lưu thành công ${res.studentCount || 670} học sinh lên Google Drive!`);
+        } catch (err) {
+          showToast("Lỗi sao lưu: " + err.message, "error");
+        } finally {
+          btnCloudBackup.disabled = false;
+        }
+      };
+    }
+
+    // Khôi phục từ Cloud Google Drive
+    const btnCloudRestore = document.getElementById("btn-cloud-restore");
+    if (btnCloudRestore) {
+      btnCloudRestore.onclick = async () => {
+        if (!confirm("Thầy có chắc chắn muốn nạp bản sao lưu từ Google Drive để đồng bộ cho máy này?")) return;
+        try {
+          btnCloudRestore.disabled = true;
+          showToast("Đang tải dữ liệu từ Google Drive...");
+          const res = await Store.restoreDBFromCloud();
+          showToast(`✅ Đã khôi phục thành công dữ liệu từ Google Drive (Cập nhật: ${res.updatedAt || 'Mới nhất'})!`);
+          renderApp();
+        } catch (err) {
+          showToast("Lỗi khôi phục: " + err.message, "error");
+        } finally {
+          btnCloudRestore.disabled = false;
+        }
+      };
+    }
+
+    // Xuất file JSON cục bộ
+    const btnExportJson = document.getElementById("btn-export-json");
+    if (btnExportJson) {
+      btnExportJson.onclick = () => {
+        Store.exportDBToJSON();
+        showToast("Đã xuất tệp sao lưu dữ liệu (.json) về máy tính!");
+      };
+    }
+
+    // Nhập file JSON cục bộ
+    const inputImportJson = document.getElementById("input-import-json");
+    if (inputImportJson) {
+      inputImportJson.onchange = (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          try {
+            const content = String(evt.target.result || "");
+            const parsed = Store.importDBFromJSON(content);
+            showToast(`✅ Đã phục hồi thành công ${parsed.students.length} học sinh từ tệp sao lưu!`);
+            renderApp();
+          } catch (err) {
+            showToast("Lỗi nạp tệp: " + err.message, "error");
+          }
+        };
+        reader.readAsText(file);
       };
     }
   }
