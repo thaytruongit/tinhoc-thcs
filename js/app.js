@@ -75,6 +75,14 @@
       if (state.currentUser && state.currentUser.role === "student") {
         state.partnerIds = state.currentUser.partnerIds || [state.currentUser.id];
         state.groupName = state.currentUser.groupName || state.currentUser.defaultGroup || "Nhóm 01";
+        
+        // Tự động chọn bài học kế tiếp chưa học của khối
+        const db = Store.loadStudentsDB();
+        const fresh = db.students.find(s => s.id === state.currentUser.id) || state.currentUser;
+        const completed = fresh.completedLessons || [];
+        const lessonsOfGrade = (Curriculum.lessons || []).filter(l => Number(l.grade) === Number(fresh.grade));
+        const nextLesson = lessonsOfGrade.find(l => !completed.includes(l.id));
+        state.selectedHomePeriod = nextLesson ? nextLesson.period : (lessonsOfGrade[0]?.period || 1);
       }
     }
   } catch (e) {}
@@ -627,7 +635,12 @@
         const gName = found.defaultGroup || `Nhóm Máy ${String(found.seatNumber || 1).padStart(2, "0")}`;
         state.partnerIds = memberIds;
         state.groupName = gName;
-        state.selectedHomePeriod = 1;
+
+        // Tự động xuất phát từ bài học kế tiếp chưa học của khối
+        const completed = found.completedLessons || [];
+        const lessonsOfGrade = Curriculum.lessons.filter(l => Number(l.grade) === Number(found.grade));
+        const nextLesson = lessonsOfGrade.find(l => !completed.includes(l.id));
+        state.selectedHomePeriod = nextLesson ? nextLesson.period : (lessonsOfGrade[0]?.period || 1);
 
         // Đăng ký nhóm vào danh sách nhóm đang hoạt động trong Phòng Live
         const groups = Store.getGroups().filter(g => !g.memberIds.some(id => memberIds.includes(id)));
@@ -722,7 +735,7 @@
                   </span>
                 </div>
                 <div class="text-xs text-slate-500">
-                  TK: <b>${escapeHtml(freshStudent.username)}</b> • Cấp độ ${freshStudent.level || 1} • <b>${freshStudent.xp || 0} XP</b>
+                  TK: <b>${escapeHtml(freshStudent.username)}</b> • Cấp độ ${freshStudent.level || 1} • <b>${freshStudent.xp || 0} XP</b> • Tiến độ: <b class="text-blue-700">${(freshStudent.completedLessons || []).length}/29 Tiết</b>
                 </div>
               </div>
             </div>
@@ -1238,6 +1251,49 @@
         <button id="btn-submit-minigame" class="w-full py-3.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold shadow-lg transition">
           🏆 Nộp Bài Minigame Củng cố & Nhận Điểm XP Nhóm
         </button>
+
+        <!-- BẢNG XẾP HẠNG MINIGAME TIẾT HỌC (CẬP NHẬT THỜI GIAN THỰC & LƯU CHỐT CUỐI CÙNG) -->
+        <div class="mt-6 pt-5 border-t border-slate-200">
+          <div class="flex items-center justify-between mb-3">
+            <h4 class="text-sm font-extrabold text-slate-800 flex items-center gap-2">
+              <span>🏆</span> Bảng Xếp Hạng Minigame Lớp ${escapeHtml(state.currentUser?.className || '')} (${
+                Store.getMinigameSubs().filter(s => s.lessonId === lesson.id && s.className === state.currentUser?.className).length
+              } nhóm đã nộp)
+            </h4>
+            <span class="text-[11px] text-purple-700 bg-purple-100 font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-purple-600 animate-ping"></span> Cập nhật thời gian thực
+            </span>
+          </div>
+          ${(() => {
+            const classSubs = Store.getMinigameSubs()
+              .filter(s => s.lessonId === lesson.id && s.className === state.currentUser?.className)
+              .sort((a, b) => (b.score || 0) - (a.score || 0) || (b.maxStreak || 0) - (a.maxStreak || 0));
+            if (classSubs.length === 0) {
+              return `<p class="text-xs text-slate-400 italic">Chưa có nhóm nào nộp bài. Hãy là nhóm đầu tiên hoàn thành để dẫn đầu bảng xếp hạng!</p>`;
+            }
+            return `
+              <div class="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                ${classSubs.map((s, idx) => `
+                  <div class="flex items-center justify-between p-2.5 rounded-xl border text-xs ${
+                    idx === 0 ? 'bg-amber-50 border-amber-300 font-bold' : idx === 1 ? 'bg-slate-100 border-slate-300' : 'bg-white border-slate-200'
+                  }">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <span class="w-6 h-6 rounded-full flex items-center justify-center font-extrabold flex-shrink-0 ${
+                        idx === 0 ? 'bg-amber-400 text-amber-950' : idx === 1 ? 'bg-slate-300 text-slate-800' : 'bg-slate-100 text-slate-600'
+                      }">${idx + 1}</span>
+                      <span class="font-bold text-slate-900 truncate">${escapeHtml(s.groupName || 'Nhóm')}</span>
+                      <span class="text-slate-500 truncate">(${escapeHtml((s.memberNames || []).join(', '))})</span>
+                    </div>
+                    <div class="flex items-center gap-3 flex-shrink-0">
+                      <span class="font-extrabold text-purple-700">${s.score}/10đ</span>
+                      <span class="text-[11px] text-slate-400">⏱ ${s.submittedAt}</span>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            `;
+          })()}
+        </div>
       </div>
     `;
   }
@@ -1352,9 +1408,15 @@
           <select id="home-period-select" class="px-3.5 py-2 rounded-xl border border-slate-300 font-bold text-sm">
             ${lessonsOfGrade
               .map(
-                l => `<option value="${l.period}" ${Number(state.selectedHomePeriod) === l.period ? "selected" : ""}>
-                  Tiết ${l.period}: ${escapeHtml(l.title)} (${l.isPractical ? "Thực hành" : "Lý thuyết"})
-                </option>`
+                l => {
+                  const isDone = (student.completedLessons || []).includes(l.id);
+                  const scoreRec = (student.lessonScores || {})[l.id];
+                  const scoreTxt = scoreRec && scoreRec.final ? ` — [${scoreRec.final}đ]` : "";
+                  const icon = isDone ? "✅ " : "⚪ ";
+                  return `<option value="${l.period}" ${Number(state.selectedHomePeriod) === l.period ? "selected" : ""}>
+                    ${icon}Tiết ${l.period}: ${escapeHtml(l.title)} ${isDone ? `(Đã học xong${scoreTxt})` : `(${l.isPractical ? "Thực hành" : "Lý thuyết"})`}
+                  </option>`;
+                }
               )
               .join("")}
           </select>
@@ -1405,9 +1467,15 @@
           <select id="practice-period-select" class="px-3.5 py-2 rounded-xl border border-slate-300 font-bold text-sm">
             ${lessonsOfGrade
               .map(
-                l => `<option value="${l.period}" ${Number(state.selectedHomePeriod) === l.period ? "selected" : ""}>
-                  Tiết ${l.period}: ${escapeHtml(l.title)}
-                </option>`
+                l => {
+                  const isDone = (student.completedLessons || []).includes(l.id);
+                  const scoreRec = (student.lessonScores || {})[l.id];
+                  const scoreTxt = scoreRec && scoreRec.final ? ` — [${scoreRec.final}đ]` : "";
+                  const icon = isDone ? "✅ " : "⚪ ";
+                  return `<option value="${l.period}" ${Number(state.selectedHomePeriod) === l.period ? "selected" : ""}>
+                    ${icon}Tiết ${l.period}: ${escapeHtml(l.title)} ${isDone ? `(Đã học xong${scoreTxt})` : `(${l.isPractical ? "Thực hành" : "Lý thuyết"})`}
+                  </option>`;
+                }
               )
               .join("")}
           </select>
