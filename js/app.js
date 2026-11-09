@@ -43,8 +43,29 @@
     adminSearchQuery: "",
     editingStudentId: null,
     showBulkImportModal: false,
-    notification: null
+    notification: null,
+    // Homework state
+    homeworkFilterStatus: "ALL", // 'ALL' | 'PENDING' | 'SUBMITTED'
+    homeworkFilterPeriod: "ALL",
+    homeworkViewingAttachment: null,
+    studentReuploadingHwId: null,
+    // Admin Homework state
+    adminHomeworkTab: "list", // 'list' | 'create' | 'submissions'
+    adminHomeworkGradeFilter: "ALL",
+    adminHomeworkPeriodFilter: "ALL",
+    adminHomeworkSelectedId: null,
+    adminHomeworkEditingId: null,
+    adminHomeworkPendingFiles: [],
+    adminHomeworkCreateGrade: 7,
+    adminHomeworkCreatePeriod: 12,
+    adminHomeworkCreateClass: "ALL"
   };
+
+  // Expose state and utilities globally
+  window.AppState = state;
+  window.escapeHtml = escapeHtml;
+  window.showToast = showToast;
+  window.renderApp = renderApp;
 
   // Khôi phục phiên đăng nhập
   try {
@@ -65,6 +86,9 @@
     };
   }
   window.addEventListener("APP_REALTIME_SYNC", () => {
+    renderApp();
+  });
+  window.addEventListener("HOMEWORK_SYNC", () => {
     renderApp();
   });
   window.addEventListener("MQTT_STATUS_CHANGED", (e) => {
@@ -710,6 +734,11 @@
               }">
                 ⚡ Phòng Live Trên Lớp
               </button>
+              <button data-st-tab="homework" class="px-3.5 py-2 rounded-lg text-xs font-bold transition ${
+                state.studentTab === "homework" ? "bg-blue-600 text-white shadow" : "text-slate-600 hover:bg-white"
+              }">
+                \uD83C\uDFE0 B\u00E0i t\u1EADp v\u1EC1 nh\u00E0
+              </button>
               <button data-st-tab="preclass" class="px-3.5 py-2 rounded-lg text-xs font-bold transition ${
                 state.studentTab === "preclass" ? "bg-blue-600 text-white shadow" : "text-slate-600 hover:bg-white"
               }">
@@ -741,6 +770,7 @@
         <!-- Nội dung chính -->
         <main class="max-w-7xl w-full mx-auto flex-1 p-4 md:p-6">
           ${state.studentTab === "live" ? renderStudentLiveClassroom(freshStudent, live, db) : ""}
+          ${state.studentTab === "homework" && window.HomeworkModule ? window.HomeworkModule.renderStudentHomeworkView(freshStudent) : ""}
           ${state.studentTab === "preclass" ? renderStudentPreClass(freshStudent) : ""}
           ${state.studentTab === "practice" ? renderStudentSelfPractice(freshStudent) : ""}
           ${state.studentTab === "exams" ? renderStudentPeriodicExams(freshStudent) : ""}
@@ -1803,6 +1833,7 @@
   }
 
   function bindStudentEvents() {
+    if (window.HomeworkModule) window.HomeworkModule.bindStudentHomeworkEvents();
     // Xử lý vào làm bài thi có kiểm soát
     const btnEnterExam = document.getElementById("btn-enter-active-exam") || document.querySelector(".start-active-exam-btn");
     if (btnEnterExam) {
@@ -2299,6 +2330,11 @@
               }">
                 📡 Điều khiển Phòng Live & Chấm Drive
               </button>
+              <button data-ad-tab="homework" class="px-3.5 py-2 rounded-lg text-xs font-bold transition ${
+                state.adminTab === "homework" ? "bg-indigo-600 text-white shadow" : "text-slate-300 hover:text-white"
+              }">
+                \uD83C\uDFE0 Giao & Ch\u1EA5m B\u00E0i T\u1EADp V\u1EC1 Nh\u00E0
+              </button>
               <button data-ad-tab="exams" class="px-3.5 py-2 rounded-lg text-xs font-bold transition ${
                 state.adminTab === "exams" ? "bg-indigo-600 text-white shadow" : "text-slate-300 hover:text-white"
               }">
@@ -2329,6 +2365,7 @@
 
         <main class="max-w-7xl w-full mx-auto flex-1 p-4 md:p-6">
           ${state.adminTab === "live" ? renderAdminLiveController(live) : ""}
+          ${state.adminTab === "homework" && window.HomeworkModule ? window.HomeworkModule.renderAdminHomeworkManager() : ""}
           ${state.adminTab === "exams" ? renderAdminExamManager() : ""}
           ${state.adminTab === "students" ? renderAdminStudentManager() : ""}
           ${state.adminTab === "reports" ? renderAdminReports() : ""}
@@ -2574,6 +2611,188 @@
   // ----------------------------------------------------------------------------
   // 3.2. QUẢN LÝ KHỐI, LỚP, TÀI KHOẢN HỌC SINH (THÊM, SỬA, XÓA & NẠP HÀNG LOẠT TỰ SINH TK, MK 123)
   // ----------------------------------------------------------------------------
+    // ----------------------------------------------------------------------------
+  // 3.1b. Cá»”NG GIÃO VIÃŠN: GIAO Äá»€ & GIÃM SÃT THI Äá»ŠNH Ká»² CÃ“ CHá»NG GIAN Láº¬N
+  // ----------------------------------------------------------------------------
+  function renderAdminExamManager() {
+    const db = Store.loadStudentsDB();
+    const activeSession = Store.getActiveExamSession();
+    const allExams = Curriculum.periodicExams || [];
+    const violations = Store.getExamViolations();
+    const submissions = Store.getExamSubmissions();
+
+    const selectedGrade = state.adminExamSelectedGrade || 7;
+    const examsOfGrade = allExams.filter(e => Number(e.grade) === Number(selectedGrade));
+    const classesOfGrade = db.classes.filter(c => Number(c.grade) === Number(selectedGrade));
+
+    return `
+      <div class="space-y-6">
+        <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-6">
+          <div class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-4">
+            <div>
+              <span class="text-xs font-bold text-indigo-600 uppercase">Kháº£o thÃ­ Äá»‹nh ká»³ Chuáº©n Ma tráº­n Äáº·c táº£</span>
+              <h2 class="text-xl font-extrabold text-slate-900 mt-0.5">
+                ðŸ“ Quáº£n lÃ½ & Giao Äá» Thi Äá»‹nh Ká»³ (Cháº¿ Ä‘á»™ GiÃ¡m sÃ¡t Chá»‘ng Gian Láº­n)
+              </h2>
+            </div>
+            ${
+              activeSession && activeSession.status === "active"
+                ? `<div class="flex items-center gap-2">
+                    <span class="inline-block w-3 h-3 rounded-full bg-emerald-500 animate-ping"></span>
+                    <span class="px-3.5 py-1.5 rounded-full bg-emerald-100 text-emerald-800 font-extrabold text-xs">
+                      â— ÄANG Má»ž CA THI CHO Lá»šP ${escapeHtml(activeSession.targetClass)} (${activeSession.durationMinutes} phÃºt)
+                    </span>
+                    <button id="btn-close-exam-session" class="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs shadow-sm transition">
+                      ðŸ›‘ ÄÃ³ng Ca Thi Ngay
+                    </button>
+                  </div>`
+                : `<span class="px-3.5 py-1.5 rounded-full bg-slate-100 text-slate-600 font-bold text-xs">
+                    âšª ChÆ°a cÃ³ ca thi nÃ o Ä‘ang má»Ÿ
+                  </span>`
+            }
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-4 p-5 rounded-2xl bg-indigo-50/70 border border-indigo-200">
+            <div>
+              <label class="block text-xs font-bold text-slate-700 uppercase mb-1">1. Chá»n Khá»‘i</label>
+              <select id="exam-cfg-grade" class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-bold text-sm bg-white">
+                ${[6, 7, 8, 9].map(g => `<option value="${g}" ${Number(selectedGrade) === g ? "selected" : ""}>Khá»‘i ${g}</option>`).join("")}
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-bold text-slate-700 uppercase mb-1">2. Chá»n Äá» thi Äá»‹nh ká»³</label>
+              <select id="exam-cfg-id" class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-bold text-sm bg-white">
+                ${examsOfGrade.map(e => `<option value="${e.id}">${escapeHtml(e.examCode)} â€” ${escapeHtml(e.title)} (20 cÃ¢u)</option>`).join("")}
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-bold text-slate-700 uppercase mb-1">3. Giao cho Lá»›p nÃ o?</label>
+              <select id="exam-cfg-class" class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-bold text-sm bg-white">
+                <option value="ALL">Táº¥t cáº£ cÃ¡c lá»›p Khá»‘i ${selectedGrade}</option>
+                ${classesOfGrade.map(c => `<option value="${c.id}">${c.name} (${c.studentCount} HS)</option>`).join("")}
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-bold text-slate-700 uppercase mb-1">4. Thá»i gian lÃ m bÃ i (PhÃºt)</label>
+              <select id="exam-cfg-duration" class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-bold text-sm bg-white">
+                <option value="15">15 PhÃºt (Kiá»ƒm tra 15p)</option>
+                <option value="45" selected>45 PhÃºt (Kiá»ƒm tra Äá»‹nh ká»³ 1 tiáº¿t)</option>
+                <option value="60">60 PhÃºt</option>
+                <option value="90">90 PhÃºt</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
+              <label class="block text-xs font-bold text-slate-700 uppercase">Trá»« Ä‘iá»ƒm má»—i láº§n chuyá»ƒn tab / rá»i mÃ n hÃ¬nh:</label>
+              <select id="exam-cfg-deduction" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm font-bold bg-white">
+                <option value="0.5" selected>Trá»« -0.5 Ä‘iá»ƒm / láº§n vi pháº¡m</option>
+                <option value="1.0">Trá»« -1.0 Ä‘iá»ƒm / láº§n vi pháº¡m</option>
+                <option value="2.0">Trá»« -2.0 Ä‘iá»ƒm / láº§n vi pháº¡m</option>
+                <option value="0">KhÃ´ng trá»« Ä‘iá»ƒm (Chá»‰ cáº£nh bÃ¡o)</option>
+              </select>
+              <p class="text-[11px] text-slate-500">Há»‡ thá»‘ng tá»± Ä‘á»™ng phÃ¡t hiá»‡n khi HS chuyá»ƒn sang tab khÃ¡c hoáº·c má»Ÿ á»©ng dá»¥ng khÃ¡c.</p>
+            </div>
+
+            <div class="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
+              <label class="block text-xs font-bold text-slate-700 uppercase">Sá»‘ láº§n vi pháº¡m tá»‘i Ä‘a trÆ°á»›c khi thu bÃ i:</label>
+              <select id="exam-cfg-max-vios" class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm font-bold bg-white">
+                <option value="3" selected>Vi pháº¡m quÃ¡ 3 láº§n âž” Tá»± Ä‘á»™ng thu bÃ i</option>
+                <option value="2">Vi pháº¡m quÃ¡ 2 láº§n âž” Tá»± Ä‘á»™ng thu bÃ i</option>
+                <option value="5">Vi pháº¡m quÃ¡ 5 láº§n âž” Tá»± Ä‘á»™ng thu bÃ i</option>
+              </select>
+              <p class="text-[11px] text-slate-500">Khi vÆ°á»£t quÃ¡ ngÆ°á»¡ng, há»‡ thá»‘ng sáº½ tá»± Ä‘á»™ng cháº¥m Ä‘iá»ƒm vÃ  khÃ³a bÃ i thi ngay láº­p tá»©c.</p>
+            </div>
+
+            <div class="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between">
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase">Quy chuáº©n Báº£o máº­t PhÃ²ng thi:</label>
+                <div class="text-xs text-slate-600 mt-1 space-y-0.5">
+                  <div>ðŸ”’ KhÃ³a chuá»™t pháº£i, cáº¥m Copy/Paste</div>
+                  <div>ðŸš« KhÃ³a phÃ­m F12, Ctrl+C, Ctrl+V, Alt+Tab</div>
+                </div>
+              </div>
+              <button id="btn-launch-exam-session" class="w-full py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-extrabold text-sm shadow-md transition mt-2">
+                ðŸš€ GIAO Äá»€ CHO Lá»šP & Báº®T Äáº¦U TÃNH GIá»œ
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-5">
+          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+            <div>
+              <span class="text-xs font-bold text-red-600 uppercase">GiÃ¡m sÃ¡t Thá»i gian thá»±c</span>
+              <h3 class="text-lg font-extrabold text-slate-900">
+                ðŸš¨ Báº£ng GiÃ¡m SÃ¡t PhÃ²ng Thi & Nháº­t KÃ½ Vi Pháº¡m Chuyá»ƒn Tab (${submissions.length} bÃ i Ä‘Ã£ ná»™p, ${violations.length} lÆ°á»£t vi pháº¡m)
+              </h3>
+            </div>
+            <button id="btn-export-exam-results" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs shadow-sm">
+              ðŸ“¥ Xuáº¥t Káº¿t Quáº£ Äiá»ƒm Thi (.CSV Excel)
+            </button>
+          </div>
+
+          <div class="overflow-x-auto max-h-[480px] custom-scrollbar border border-slate-200 rounded-xl">
+            <table class="w-full text-left border-collapse text-xs">
+              <thead class="bg-slate-100 text-slate-700 sticky top-0">
+                <tr>
+                  <th class="p-3 border-b">STT</th>
+                  <th class="p-3 border-b">Lá»›p</th>
+                  <th class="p-3 border-b">Há»c sinh</th>
+                  <th class="p-3 border-b">TÃ i khoáº£n</th>
+                  <th class="p-3 border-b">BÃ i thi</th>
+                  <th class="p-3 border-b text-center">Sá»‘ láº§n Chuyá»ƒn Tab</th>
+                  <th class="p-3 border-b text-center">Äiá»ƒm Vi Pháº¡m Trá»«</th>
+                  <th class="p-3 border-b text-center">Äiá»ƒm Gá»‘c</th>
+                  <th class="p-3 border-b text-center font-extrabold">Äiá»ƒm Thá»±c Nháº­n</th>
+                  <th class="p-3 border-b text-right">Tráº¡ng thÃ¡i</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-200">
+                ${
+                  submissions.length === 0
+                    ? `<tr><td colspan="10" class="p-6 text-center text-slate-500">ChÆ°a cÃ³ bÃ i thi nÃ o Ä‘Æ°á»£c ná»™p trong phiÃªn nÃ y.</td></tr>`
+                    : submissions.map((sub, idx) => `
+                        <tr class="hover:bg-slate-50 ${sub.violations > 0 ? "bg-red-50/40" : ""}">
+                          <td class="p-3 font-bold text-slate-500">${idx + 1}</td>
+                          <td class="p-3 font-bold">${escapeHtml(sub.className)}</td>
+                          <td class="p-3 font-bold text-slate-900">${escapeHtml(sub.studentName)}</td>
+                          <td class="p-3 font-mono text-indigo-700">${escapeHtml(sub.username)}</td>
+                          <td class="p-3 text-slate-600">${escapeHtml(sub.examTitle || sub.examId)}</td>
+                          <td class="p-3 text-center">
+                            ${
+                              sub.violations > 0
+                                ? `<span class="px-2.5 py-1 rounded-full bg-red-100 text-red-800 font-extrabold text-xs">
+                                    âš ï¸ ${sub.violations} láº§n
+                                  </span>`
+                                : `<span class="text-emerald-700 font-bold">0</span>`
+                            }
+                          </td>
+                          <td class="p-3 text-center text-red-700 font-bold">-${sub.penaltyPoints || 0} Ä‘</td>
+                          <td class="p-3 text-center font-semibold">${sub.rawScore} Ä‘</td>
+                          <td class="p-3 text-center font-extrabold text-sm ${sub.finalScore >= 5 ? "text-emerald-700" : "text-red-700"}">
+                            ${sub.finalScore} / 10
+                          </td>
+                          <td class="p-3 text-right">
+                            <span class="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-bold">
+                              ÄÃ£ ná»™p (${escapeHtml(sub.submittedAt)})
+                            </span>
+                          </td>
+                        </tr>
+                      `).join("")
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   function renderAdminStudentManager() {
     const db = Store.loadStudentsDB();
     let filtered = db.students;
@@ -2879,6 +3098,7 @@
   }
 
   function bindAdminEvents() {
+    if (window.HomeworkModule) window.HomeworkModule.bindAdminHomeworkEvents();
     const btnLogout = document.getElementById("btn-admin-logout");
     if (btnLogout) {
       btnLogout.onclick = () => {
