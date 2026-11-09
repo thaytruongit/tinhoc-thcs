@@ -737,7 +737,7 @@
               <button data-st-tab="homework" class="px-3.5 py-2 rounded-lg text-xs font-bold transition ${
                 state.studentTab === "homework" ? "bg-blue-600 text-white shadow" : "text-slate-600 hover:bg-white"
               }">
-                \uD83C\uDFE0 B\u00E0i t\u1EADp v\u1EC1 nh\u00E0
+                ${"\uD83C\uDFE0 B\u00E0i t\u1EADp v\u1EC1 nh\u00E0 (BTVN)"}
               </button>
               <button data-st-tab="preclass" class="px-3.5 py-2 rounded-lg text-xs font-bold transition ${
                 state.studentTab === "preclass" ? "bg-blue-600 text-white shadow" : "text-slate-600 hover:bg-white"
@@ -2333,7 +2333,7 @@
               <button data-ad-tab="homework" class="px-3.5 py-2 rounded-lg text-xs font-bold transition ${
                 state.adminTab === "homework" ? "bg-indigo-600 text-white shadow" : "text-slate-300 hover:text-white"
               }">
-                \uD83C\uDFE0 Giao & Ch\u1EA5m B\u00E0i T\u1EADp V\u1EC1 Nh\u00E0
+                ${"\uD83C\uDFE0 Giao & Ch\u1EA5m BTVN"}
               </button>
               <button data-ad-tab="exams" class="px-3.5 py-2 rounded-lg text-xs font-bold transition ${
                 state.adminTab === "exams" ? "bg-indigo-600 text-white shadow" : "text-slate-300 hover:text-white"
