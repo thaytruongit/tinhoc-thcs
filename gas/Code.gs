@@ -87,7 +87,9 @@ function doPost(e) {
     const payload = JSON.parse(e.postData.contents);
     const action = payload.action || "uploadPracticalFile";
 
-    if (action === "backupCloudDB") {
+    if (action === "syncStudentProgress") {
+      return handleSyncStudentProgress(payload);
+    } else if (action === "backupCloudDB") {
       return handleBackupCloudDB(payload);
     } else if (action === "restoreCloudDB") {
       return handleRestoreCloudDB();
@@ -516,6 +518,109 @@ function handleSyncReport(payload) {
     status: "ok",
     syncedCount: (payload.rows || []).length,
     timestamp: Utilities.formatDate(new Date(), "Asia/Ho_Chi_Minh", "dd/MM/yyyy HH:mm:ss")
+  });
+}
+
+/**
+ * Tự động đồng bộ và lưu tiến độ học tập (XP, Cấp độ, Điểm số, Huy hiệu) của học sinh vào Google Drive CSDL
+ */
+function handleSyncStudentProgress(payload) {
+  const rootIter = DriveApp.getFoldersByName(CONFIG.ROOT_FOLDER);
+  const rootFolder = rootIter.hasNext() ? rootIter.next() : DriveApp.createFolder(CONFIG.ROOT_FOLDER);
+  const subIter = rootFolder.getFoldersByName(CONFIG.SUB_FOLDER);
+  const baseFolder = subIter.hasNext() ? subIter.next() : rootFolder.createFolder(CONFIG.SUB_FOLDER);
+
+  const dbFileName = "HE_THONG_TINHOC_THCS_DB.json";
+  const files = baseFolder.getFilesByName(dbFileName);
+  let db = null;
+  let file = null;
+
+  if (files.hasNext()) {
+    file = files.next();
+    try {
+      db = JSON.parse(file.getBlob().getDataAsString());
+    } catch (e) {
+      db = null;
+    }
+  }
+
+  if (!db || !Array.isArray(db.students)) {
+    db = { classes: [], students: [] };
+  }
+
+  const studentUpdates = Array.isArray(payload.students) ? payload.students : (payload.student ? [payload.student] : []);
+  let updatedCount = 0;
+
+  studentUpdates.forEach(function (up) {
+    if (!up || !up.id) return;
+    let st = db.students.find(function (s) { return s.id === up.id; });
+    if (!st) {
+      st = { id: up.id, username: up.username, fullName: up.fullName, className: up.className, grade: up.grade };
+      db.students.push(st);
+    }
+    // Cập nhật thông tin mới nhất
+    st.xp = Math.max(Number(st.xp) || 0, Number(up.xp) || 0);
+    st.level = Math.max(Number(st.level) || 1, Number(up.level) || 1);
+    
+    // Hợp nhất completedLessons
+    if (!Array.isArray(st.completedLessons)) st.completedLessons = [];
+    if (Array.isArray(up.completedLessons)) {
+      up.completedLessons.forEach(function (lid) {
+        if (!st.completedLessons.includes(lid)) st.completedLessons.push(lid);
+      });
+    }
+
+    // Hợp nhất badges
+    if (!Array.isArray(st.badges)) st.badges = [];
+    if (Array.isArray(up.badges)) {
+      up.badges.forEach(function (bid) {
+        if (!st.badges.includes(bid)) st.badges.push(bid);
+      });
+    }
+
+    // Hợp nhất lessonScores
+    if (!st.lessonScores) st.lessonScores = {};
+    if (up.lessonScores) {
+      Object.keys(up.lessonScores).forEach(function (lid) {
+        const uRec = up.lessonScores[lid];
+        if (!st.lessonScores[lid]) st.lessonScores[lid] = uRec;
+        else {
+          st.lessonScores[lid].act1 = Math.max(Number(st.lessonScores[lid].act1) || 0, Number(uRec.act1) || 0);
+          st.lessonScores[lid].act2 = Math.max(Number(st.lessonScores[lid].act2) || 0, Number(uRec.act2) || 0);
+          st.lessonScores[lid].act3 = Math.max(Number(st.lessonScores[lid].act3) || 0, Number(uRec.act3) || 0);
+          const scs = [st.lessonScores[lid].act1, st.lessonScores[lid].act2, st.lessonScores[lid].act3].filter(function (v) { return v > 0; });
+          st.lessonScores[lid].final = scs.length > 0 ? Number((scs.reduce(function (a, b) { return a + b; }, 0) / scs.length).toFixed(2)) : 0;
+        }
+      });
+    }
+
+    // Hợp nhất examScores
+    if (!st.examScores) st.examScores = {};
+    if (up.examScores) {
+      Object.keys(up.examScores).forEach(function (eid) {
+        st.examScores[eid] = up.examScores[eid];
+      });
+    }
+
+    st.lastActive = Utilities.formatDate(new Date(), "Asia/Ho_Chi_Minh", "dd/MM/yyyy HH:mm:ss");
+    updatedCount++;
+  });
+
+  const jsonString = JSON.stringify(db, null, 2);
+  if (file) {
+    file.setContent(jsonString);
+  } else {
+    file = baseFolder.createFile(dbFileName, jsonString, "application/json");
+  }
+
+  const nowVN = Utilities.formatDate(new Date(), "Asia/Ho_Chi_Minh", "dd/MM/yyyy HH:mm:ss");
+  file.setDescription("Cơ sở dữ liệu học sinh THCS Mão Điền - Cập nhật tự động: " + nowVN);
+
+  return jsonResponse({
+    status: "ok",
+    message: "Đã tự động lưu thành công tiến độ vào CSDL Google Drive!",
+    updatedCount: updatedCount,
+    timestamp: nowVN
   });
 }
 

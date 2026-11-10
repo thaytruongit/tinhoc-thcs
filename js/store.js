@@ -273,6 +273,30 @@
     db.classes = Object.values(classMap).sort((a, b) => a.grade - b.grade || a.id.localeCompare(b.id));
     localStorage.setItem(STORAGE_KEYS.STUDENTS_DB, JSON.stringify(db));
     broadcastLocal("DB_UPDATED", { timestamp: Date.now() });
+
+    // Tự động đẩy đồng bộ lên CSDL Google Drive ở chế độ nền (không làm nghẽn giao diện)
+    triggerAutoCloudSync(db);
+  }
+
+  let autoSyncDebounceTimer = null;
+  function triggerAutoCloudSync(db) {
+    const cfg = loadJSON(STORAGE_KEYS.GAS_CONFIG, {});
+    if (!cfg.gasWebAppUrl || !cfg.gasWebAppUrl.startsWith("http")) return;
+
+    if (autoSyncDebounceTimer) clearTimeout(autoSyncDebounceTimer);
+    autoSyncDebounceTimer = setTimeout(async () => {
+      try {
+        await fetch(cfg.gasWebAppUrl, {
+          method: "POST",
+          body: JSON.stringify({
+            action: "syncStudentProgress",
+            students: db.students
+          })
+        });
+      } catch (e) {
+        // Dự phòng offline, tự động retry ở lần thao tác tiếp theo
+      }
+    }, 1500);
   }
 
   function getDefaultLiveState() {
@@ -907,6 +931,23 @@
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  }
+
+  async function syncSingleStudentToCloud(student) {
+    const cfg = loadJSON(STORAGE_KEYS.GAS_CONFIG, {});
+    if (!cfg.gasWebAppUrl || !cfg.gasWebAppUrl.startsWith("http")) return null;
+    try {
+      const res = await fetch(cfg.gasWebAppUrl, {
+        method: "POST",
+        body: JSON.stringify({
+          action: "syncStudentProgress",
+          student: student
+        })
+      });
+      return await res.json();
+    } catch (e) {
+      return null;
+    }
   }
 
   function importDBFromJSON(jsonString) {
